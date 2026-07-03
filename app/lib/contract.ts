@@ -5,7 +5,6 @@ import {
   BASE_FEE,
   nativeToScVal,
   Address,
-  Operation,
 } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
 

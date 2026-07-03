@@ -897,7 +897,7 @@ export default function CreateJob() {
                     <button
                       type="button"
                       onClick={addMilestone}
-                      aria-label="+ Add Milestone"
+                      aria-label="Add milestone"
                       className={`${buttonClassName} text-accent-soft hover:text-accent-soft-hover rounded-sm px-0 py-0 active:scale-95`}
                     >
                       + Add Milestone
@@ -926,8 +926,8 @@ export default function CreateJob() {
                             value={m.amount}
                             onChange={(e) => updateMilestone(i, e.target.value)}
                             onFocus={() => setActiveSection("milestones")}
-                            placeholder={`Milestone ${i + 1} amount`}
-                            aria-label={`Milestone ${i + 1} amount`}
+                            placeholder={`Milestone ${i + 1} amount (stroops)`}
+                            aria-label={`Milestone ${i + 1} amount in stroops`}
                             aria-required="true"
                             type="number"
                             min="0"

@@ -1,7 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { action } from "@storybook/blocks";
 
 import CreateJobForm, { type CreateJobFormProps } from "./CreateJobForm";
+
+/** @storybook/addon-actions isn't installed; log to the console instead. */
+function action(name: string) {
+  return (...args: unknown[]) => console.log(`[${name}]`, ...args);
+}
 
 const meta: Meta<typeof CreateJobForm> = {
   title: "Forms/CreateJobForm",
