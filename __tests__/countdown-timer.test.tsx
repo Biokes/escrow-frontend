@@ -81,4 +81,61 @@ describe("CountdownTimer", () => {
     render(<CountdownTimer deadline={1 * SECOND} eligibleLabel="Ready to claim" />);
     expect(screen.getByTestId("countdown-eligible")).toHaveTextContent("Ready to claim");
   });
+
+  it("fires onWarningThreshold once when remaining time crosses into the threshold", () => {
+    const onWarningThreshold = vi.fn();
+    render(
+      <CountdownTimer
+        deadline={5 * SECOND}
+        warningThresholdMs={2 * SECOND}
+        onWarningThreshold={onWarningThreshold}
+      />
+    );
+    expect(onWarningThreshold).not.toHaveBeenCalled();
+
+    // Advance to 4s remaining -> still outside the 2s warning window.
+    act(() => {
+      vi.advanceTimersByTime(1 * SECOND);
+    });
+    expect(onWarningThreshold).not.toHaveBeenCalled();
+
+    // Advance to 2s remaining -> crosses into the warning window.
+    act(() => {
+      vi.advanceTimersByTime(2 * SECOND);
+    });
+    expect(onWarningThreshold).toHaveBeenCalledTimes(1);
+
+    // Further ticks within the window don't re-fire.
+    act(() => {
+      vi.advanceTimersByTime(1 * SECOND);
+    });
+    expect(onWarningThreshold).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire onWarningThreshold once the deadline has fully elapsed", () => {
+    const onWarningThreshold = vi.fn();
+    render(
+      <CountdownTimer
+        deadline={1 * SECOND}
+        warningThresholdMs={2 * SECOND}
+        onWarningThreshold={onWarningThreshold}
+      />
+    );
+    expect(onWarningThreshold).toHaveBeenCalledTimes(1);
+
+    onWarningThreshold.mockClear();
+    act(() => {
+      vi.advanceTimersByTime(2 * SECOND);
+    });
+    expect(onWarningThreshold).not.toHaveBeenCalled();
+  });
+
+  it("does not fire onWarningThreshold when no threshold is configured", () => {
+    const onWarningThreshold = vi.fn();
+    render(<CountdownTimer deadline={1 * SECOND} onWarningThreshold={onWarningThreshold} />);
+    act(() => {
+      vi.advanceTimersByTime(2 * SECOND);
+    });
+    expect(onWarningThreshold).not.toHaveBeenCalled();
+  });
 });
