@@ -69,9 +69,6 @@ const statusColor: Record<string, string> = {
 const baseBtn =
   "text-xs px-3 py-1.5 rounded-lg transition-all whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-page disabled:opacity-40 disabled:cursor-not-allowed";
 
-/** Auto-release deadline warning window: badge shows once this close to the deadline. */
-const DEADLINE_WARNING_THRESHOLD_MS = 24 * 60 * 60 * 1000;
-
 /**
  * Compute the release percentage (0–100) for PartiallyReleased milestones.
  * Returns null if either value is missing, zero, or non-numeric.
@@ -140,18 +137,6 @@ export default function MilestoneCard({
   const isDeadlineElapsed =
     liveElapsed ||
     (typeof autoReleaseDeadline === "number" && autoReleaseDeadline <= mountedAt);
-
-  // Whether the auto-release deadline is within the warning window. Same
-  // mount-time-snapshot + live-callback pattern as isDeadlineElapsed above:
-  // `liveWarning` catches crossing into the window while mounted, via
-  // CountdownTimer's onWarningThreshold callback below.
-  const [liveWarning, setLiveWarning] = useState(false);
-  const isWithinDeadlineWarning =
-    !isDeadlineElapsed &&
-    (liveWarning ||
-      (typeof autoReleaseDeadline === "number" &&
-        autoReleaseDeadline - mountedAt > 0 &&
-        autoReleaseDeadline - mountedAt <= DEADLINE_WARNING_THRESHOLD_MS));
 
   /** Client-side validation + submission handler for partial release. */
   function handlePartialReleaseSubmit() {
@@ -346,25 +331,10 @@ export default function MilestoneCard({
             {/* Auto-release countdown for delivered milestones */}
             {milestone.status === "Delivered" &&
               typeof autoReleaseDeadline === "number" && (
-                <>
-                  <CountdownTimer
-                    deadline={autoReleaseDeadline}
-                    onElapsed={() => setLiveElapsed(true)}
-                    warningThresholdMs={DEADLINE_WARNING_THRESHOLD_MS}
-                    onWarningThreshold={() => setLiveWarning(true)}
-                  />
-                  {isWithinDeadlineWarning && (
-                    <span
-                      role="status"
-                      aria-live="polite"
-                      data-testid="milestone-deadline-warning"
-                      aria-label={`${milestoneLabel} auto-release deadline approaching`}
-                      className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border bg-warning-soft/10 text-warning-soft border-warning-soft/30"
-                    >
-                      ⚠ Deadline approaching
-                    </span>
-                  )}
-                </>
+                <CountdownTimer
+                  deadline={autoReleaseDeadline}
+                  onElapsed={() => setLiveElapsed(true)}
+                />
               )}
             {/* Status field error */}
             {errors?.status && (
