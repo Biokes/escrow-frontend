@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  checkRabeNetworkMatch,
   formatConsoleWarningBlock,
   formatStackTrace,
   logRabeWarning,
+  RabeNetworkMismatchError,
   RabeTransactionTracker,
   rabeTracker,
+  warnOnRabeNetworkMismatch,
 } from "@/app/lib/rabe_connector";
 
 describe("rabe_connector console warning blocks", () => {
@@ -102,5 +105,66 @@ describe("rabe_connector console warning blocks", () => {
 
     tracker.clear();
     expect(tracker.getHistory()).toHaveLength(0);
+  });
+});
+
+describe("rabe_connector network mismatch checks", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("reports no mismatch when networks align", () => {
+    const state = checkRabeNetworkMatch("testnet", "testnet");
+    expect(state.mismatched).toBe(false);
+    expect(state.warningMessage).toBeNull();
+  });
+
+  it("builds a warning message when Mainnet vs Testnet diverge", () => {
+    const state = checkRabeNetworkMatch("mainnet", "testnet");
+    expect(state.mismatched).toBe(true);
+    expect(state.walletNetwork).toBe("mainnet");
+    expect(state.appNetwork).toBe("testnet");
+    expect(state.warningMessage).toMatch(/Network mismatch/i);
+    expect(state.warningMessage).toMatch(/Mainnet/);
+    expect(state.warningMessage).toMatch(/Testnet/);
+  });
+
+  it("builds the inverse warning (testnet wallet on mainnet app)", () => {
+    const state = checkRabeNetworkMatch("testnet", "mainnet");
+    expect(state.mismatched).toBe(true);
+    expect(state.warningMessage).toMatch(/Testnet/);
+    expect(state.warningMessage).toMatch(/Mainnet/);
+  });
+
+  it("carries wallet and app networks on the mismatch error", () => {
+    const err = new RabeNetworkMismatchError("mainnet", "testnet");
+    expect(err.name).toBe("RabeNetworkMismatchError");
+    expect(err.walletNetwork).toBe("mainnet");
+    expect(err.appNetwork).toBe("testnet");
+    expect(err.message).toMatch(/Network mismatch/i);
+  });
+
+  it("logs a formatted warning block on mismatch", () => {
+    const state = warnOnRabeNetworkMismatch("mainnet", "testnet");
+
+    expect(state.mismatched).toBe(true);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const logged = String(warnSpy.mock.calls[0][0]);
+    expect(logged).toContain("[rabe_connector]");
+    expect(logged).toContain("NETWORK MISMATCH");
+    expect(logged).toContain("--- stack trace ---");
+    expect(logged).toContain("RabeNetworkMismatchError");
+  });
+
+  it("does not log when networks match", () => {
+    const state = warnOnRabeNetworkMismatch("testnet", "testnet");
+    expect(state.mismatched).toBe(false);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
