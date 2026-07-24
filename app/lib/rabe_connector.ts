@@ -27,6 +27,16 @@ export interface RabeConsoleWarningBlock {
   phase?: RabeTxPhase;
 }
 
+/** Chains the Rabe wallet can be pointed at. */
+export type RabeNetwork = "mainnet" | "testnet";
+
+export interface RabeNetworkMismatchState {
+  mismatched: boolean;
+  walletNetwork: RabeNetwork;
+  appNetwork: RabeNetwork;
+  warningMessage: string | null;
+}
+
 const WARN_PREFIX = "[rabe_connector]";
 
 /** Captures a normalized stack string from an error or the current call site. */
@@ -88,6 +98,58 @@ export function logRabeWarning(
   });
   console.warn(formatted);
   return formatted;
+}
+
+export class RabeNetworkMismatchError extends Error {
+  constructor(
+    public readonly walletNetwork: RabeNetwork,
+    public readonly appNetwork: RabeNetwork
+  ) {
+    super(
+      `Network mismatch: Rabe wallet is on ${walletNetwork}, app expects ${appNetwork}`
+    );
+    this.name = "RabeNetworkMismatchError";
+  }
+}
+
+function capitalizeNetwork(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/**
+ * Compares the network the Rabe wallet is pointed at against the network the
+ * app expects and produces a user-facing warning message when they diverge.
+ */
+export function checkRabeNetworkMatch(
+  walletNetwork: RabeNetwork,
+  appNetwork: RabeNetwork
+): RabeNetworkMismatchState {
+  const mismatched = walletNetwork !== appNetwork;
+  return {
+    mismatched,
+    walletNetwork,
+    appNetwork,
+    warningMessage: mismatched
+      ? `Network mismatch: your Rabe wallet is on ${capitalizeNetwork(walletNetwork)} but this app uses ${capitalizeNetwork(appNetwork)}. Switch networks in Rabe to continue.`
+      : null,
+  };
+}
+
+/**
+ * Runs a network match check and, on mismatch, emits a formatted console
+ * warning block (with stack) via the shared rabe_connector debug machinery.
+ */
+export function warnOnRabeNetworkMismatch(
+  walletNetwork: RabeNetwork,
+  appNetwork: RabeNetwork
+): RabeNetworkMismatchState {
+  const state = checkRabeNetworkMatch(walletNetwork, appNetwork);
+  if (state.mismatched && state.warningMessage) {
+    logRabeWarning("NETWORK MISMATCH", state.warningMessage, {
+      err: new RabeNetworkMismatchError(walletNetwork, appNetwork),
+    });
+  }
+  return state;
 }
 
 export class RabeTransactionTracker {
