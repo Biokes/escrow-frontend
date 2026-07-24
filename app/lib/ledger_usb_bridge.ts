@@ -3,6 +3,11 @@
  * signature timeouts, rejection handling, and network mismatch checks.
  */
 
+import {
+  FeeBumpTransaction,
+  Transaction,
+  TransactionBuilder,
+} from "@stellar/stellar-sdk";
 import type { ToastType } from "@/app/context/ToastContext";
 
 export const DEFAULT_SIGNATURE_TIMEOUT_MS = 60_000;
@@ -154,4 +159,121 @@ export function checkNetworkMatch(
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+export interface LedgerMultiSigPart {
+  signerPublicKey: string;
+  signedXdr: string;
+}
+
+export interface LedgerTransactionStructure {
+  sourceAccount: string;
+  fee: string;
+  operationCount: number;
+  signatureCount: number;
+}
+
+export interface LedgerMultiSigAssemblyPlan {
+  baseXdr: string;
+  structure: LedgerTransactionStructure;
+  pendingSigners: string[];
+}
+
+function readLedgerTransaction(
+  transactionXdr: string,
+  networkPassphrase: string
+): Transaction {
+  const envelope = TransactionBuilder.fromXDR(
+    transactionXdr,
+    networkPassphrase
+  );
+  if (envelope instanceof FeeBumpTransaction) {
+    return envelope.innerTransaction;
+  }
+  return envelope as Transaction;
+}
+
+/** Parses a transaction envelope without mutating signing state. */
+export function parseLedgerTransactionStructure(
+  transactionXdr: string,
+  networkPassphrase: string
+): LedgerTransactionStructure {
+  const tx = readLedgerTransaction(transactionXdr, networkPassphrase);
+  return {
+    sourceAccount: tx.source,
+    fee: tx.fee,
+    operationCount: tx.operations.length,
+    signatureCount: tx.signatures.length,
+  };
+}
+
+/** Validates that each partial signature envelope parses for the same network. */
+export function validateMultiSigParts(
+  parts: LedgerMultiSigPart[],
+  networkPassphrase: string
+): LedgerTransactionStructure[] {
+  return parts.map((part) =>
+    parseLedgerTransactionStructure(part.signedXdr, networkPassphrase)
+  );
+}
+
+/**
+ * Builds an assembly plan for co-signers that still need to sign the base XDR.
+ */
+export function createMultiSigAssemblyPlan(
+  baseXdr: string,
+  signerPublicKeys: string[],
+  networkPassphrase: string
+): LedgerMultiSigAssemblyPlan {
+  const structure = parseLedgerTransactionStructure(
+    baseXdr,
+    networkPassphrase
+  );
+  return {
+    baseXdr,
+    structure,
+    pendingSigners: [...signerPublicKeys],
+  };
+}
+
+/**
+ * Merges co-signer envelopes into a single multi-signature transaction XDR.
+ */
+export function assembleMultiSigTransaction(
+  baseXdr: string,
+  parts: LedgerMultiSigPart[],
+  networkPassphrase: string
+): string {
+  validateMultiSigParts(parts, networkPassphrase);
+  const merged = readLedgerTransaction(baseXdr, networkPassphrase);
+
+  for (const part of parts) {
+    const signed = readLedgerTransaction(part.signedXdr, networkPassphrase);
+    for (const signature of signed.signatures) {
+      const alreadyPresent = merged.signatures.some((existing) =>
+        existing.signature().equals(signature.signature())
+      );
+      if (!alreadyPresent) {
+        merged.signatures.push(signature);
+      }
+    }
+  }
+
+  return merged.toXDR();
+}
+
+/**
+ * Splits a partially signed transaction into discrete signer parts for Ledger
+ * co-signing workflows.
+ */
+export function splitMultiSigTransactionParts(
+  signedXdr: string,
+  signerPublicKeys: string[],
+  networkPassphrase: string
+): LedgerMultiSigPart[] {
+  parseLedgerTransactionStructure(signedXdr, networkPassphrase);
+  return signerPublicKeys.map((signerPublicKey) => ({
+    signerPublicKey,
+    signedXdr,
+  }));
 }
