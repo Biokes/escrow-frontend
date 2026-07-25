@@ -1,7 +1,7 @@
 /**
  * network_sync_checker — active network status validator:
- * alignment checks and graceful handling of wallet signature rejections
- * during sync probes.
+ * alignment checks, signature timeout bounds, and graceful handling
+ * of wallet signature rejections during sync probes.
  */
 
 import type { ToastType } from "@/app/context/ToastContext";
@@ -100,4 +100,68 @@ export async function validateNetworkSyncWithSignature<T>(
     return null;
   }
   return runNetworkSyncSign(signFn, showToast);
+}
+
+export const DEFAULT_SIGNATURE_TIMEOUT_MS = 60_000;
+
+export interface NetworkSyncSignRequest {
+  xdr: string;
+  /** Sensitive buffer cleared on timeout / completion. */
+  payload?: Uint8Array | null;
+}
+
+export interface NetworkSyncSignResult {
+  signedXdr: string;
+}
+
+export class NetworkSyncSignatureTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Network sync signature timed out after ${timeoutMs}ms`);
+    this.name = "NetworkSyncSignatureTimeoutError";
+  }
+}
+
+/** Zeroes and drops a sensitive buffer so it cannot be retained after abort. */
+export function clearSensitiveMemory(
+  request: NetworkSyncSignRequest
+): NetworkSyncSignRequest {
+  if (request.payload) {
+    request.payload.fill(0);
+  }
+  request.payload = null;
+  return request;
+}
+
+/**
+ * Races a signature operation against a timeout clock. On timeout the
+ * operation is considered aborted and any sensitive payload memory is cleared.
+ */
+export async function signWithTimeout(
+  request: NetworkSyncSignRequest,
+  signFn: (xdr: string) => Promise<NetworkSyncSignResult>,
+  timeoutMs: number = DEFAULT_SIGNATURE_TIMEOUT_MS
+): Promise<NetworkSyncSignResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      clearSensitiveMemory(request);
+      reject(new NetworkSyncSignatureTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
+    clearSensitiveMemory(request);
+    return result;
+  } catch (err) {
+    if (timedOut || err instanceof NetworkSyncSignatureTimeoutError) {
+      clearSensitiveMemory(request);
+    }
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
