@@ -50,6 +50,17 @@ interface Props {
    * provided, a CountdownTimer is shown next to the status badge.
    */
   autoReleaseDeadline?: number | null;
+  /**
+   * Total auto-release window length in ms. Used with
+   * {@link deadlineWarningThresholdMs} defaults (20% of window, 24h floor).
+   */
+  autoReleaseWindowMs?: number | null;
+  /**
+   * Override for when the deadline-approaching warning badge appears.
+   * Defaults to max(24h, 20% of autoReleaseWindowMs) when window is known,
+   * otherwise a flat 24h floor.
+   */
+  deadlineWarningThresholdMs?: number;
   onPartialRelease?: (index: number, amount: string) => void;
   onClaimAutoRelease?: (index: number) => void;
   onMarkDelivered?: (i: number) => void;
@@ -68,6 +79,32 @@ const statusColor: Record<string, string> = {
 
 const baseBtn =
   "text-xs px-3 py-1.5 rounded-lg transition-all whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-page disabled:opacity-40 disabled:cursor-not-allowed";
+
+/** Default warning floor: badge shows within the last 24 hours regardless of window size. */
+export const DEADLINE_WARNING_FLOOR_MS = 24 * 60 * 60 * 1000;
+
+/** Default fraction of the auto-release window used for the warning threshold. */
+export const DEADLINE_WARNING_RATIO = 0.2;
+
+/**
+ * Resolve the deadline-warning threshold: explicit override wins; otherwise
+ * max(24h floor, 20% of the total window), falling back to the 24h floor.
+ */
+export function resolveDeadlineWarningThresholdMs(
+  windowMs?: number | null,
+  overrideMs?: number
+): number {
+  if (typeof overrideMs === "number" && overrideMs >= 0) {
+    return overrideMs;
+  }
+  if (typeof windowMs === "number" && windowMs > 0) {
+    return Math.max(
+      DEADLINE_WARNING_FLOOR_MS,
+      Math.floor(windowMs * DEADLINE_WARNING_RATIO)
+    );
+  }
+  return DEADLINE_WARNING_FLOOR_MS;
+}
 
 /**
  * Compute the release percentage (0–100) for PartiallyReleased milestones.
@@ -109,6 +146,8 @@ export default function MilestoneCard({
   onResolveDispute,
   errors,
   autoReleaseDeadline,
+  autoReleaseWindowMs,
+  deadlineWarningThresholdMs,
   amountDecimals = 7,
   amountSymbol = "XLM",
   onMarkDelivered,
@@ -137,6 +176,21 @@ export default function MilestoneCard({
   const isDeadlineElapsed =
     liveElapsed ||
     (typeof autoReleaseDeadline === "number" && autoReleaseDeadline <= mountedAt);
+
+  const warningThresholdMs = resolveDeadlineWarningThresholdMs(
+    autoReleaseWindowMs,
+    deadlineWarningThresholdMs
+  );
+
+  // Whether the auto-release deadline is within the warning window. Same
+  // mount-time-snapshot + live-callback pattern as isDeadlineElapsed above.
+  const [liveWarning, setLiveWarning] = useState(false);
+  const isWithinDeadlineWarning =
+    !isDeadlineElapsed &&
+    (liveWarning ||
+      (typeof autoReleaseDeadline === "number" &&
+        autoReleaseDeadline - mountedAt > 0 &&
+        autoReleaseDeadline - mountedAt <= warningThresholdMs));
 
   /** Client-side validation + submission handler for partial release. */
   function handlePartialReleaseSubmit() {
@@ -331,10 +385,25 @@ export default function MilestoneCard({
             {/* Auto-release countdown for delivered milestones */}
             {milestone.status === "Delivered" &&
               typeof autoReleaseDeadline === "number" && (
-                <CountdownTimer
-                  deadline={autoReleaseDeadline}
-                  onElapsed={() => setLiveElapsed(true)}
-                />
+                <>
+                  <CountdownTimer
+                    deadline={autoReleaseDeadline}
+                    onElapsed={() => setLiveElapsed(true)}
+                    warningThresholdMs={warningThresholdMs}
+                    onWarningThreshold={() => setLiveWarning(true)}
+                  />
+                  {isWithinDeadlineWarning && (
+                    <span
+                      role="status"
+                      aria-live="polite"
+                      data-testid="milestone-deadline-warning"
+                      aria-label={`${milestoneLabel} auto-release deadline approaching`}
+                      className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border bg-warning-soft/10 text-warning-soft border-warning-soft/30"
+                    >
+                      <span aria-hidden="true">!</span> Deadline approaching
+                    </span>
+                  )}
+                </>
               )}
             {/* Status field error */}
             {errors?.status && (
