@@ -154,3 +154,46 @@ export function warnOnMissingFreighter(
   }
   return state;
 }
+
+export class FreighterUserRejectedError extends Error {
+  constructor(message = "user rejected transaction") {
+    super(message);
+    this.name = "FreighterUserRejectedError";
+  }
+}
+
+export function isFreighterUserRejected(err: unknown): boolean {
+  if (err instanceof FreighterUserRejectedError) return true;
+  if (!(err instanceof Error)) return false;
+  const message = err.message.toLowerCase();
+  return (
+    message.includes("user rejected") ||
+    message.includes("user declined") ||
+    message.includes("request rejected") ||
+    message.includes("denied by the user")
+  );
+}
+
+/**
+ * Runs a Freighter signature step. Catches "user rejected transaction"
+ * exceptions, logs them, and shows a warning toast instead of surfacing a
+ * raw error to the caller.
+ */
+export async function runFreighterSign<T>(
+  signFn: () => Promise<T>,
+  showToast: FreighterToastHandler
+): Promise<T | null> {
+  try {
+    return await signFn();
+  } catch (err) {
+    if (isFreighterUserRejected(err)) {
+      console.warn(
+        `${LOG_PREFIX} signature rejected by user:`,
+        err instanceof Error ? err.message : err
+      );
+      showToast("Signature cancelled — you rejected the request in your wallet.", "warning");
+      return null;
+    }
+    throw err;
+  }
+}
