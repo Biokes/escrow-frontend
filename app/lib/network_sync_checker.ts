@@ -1,7 +1,7 @@
 /**
  * network_sync_checker — active network status validator:
- * alignment checks and graceful handling of wallet signature rejections
- * during sync probes.
+ * alignment checks, wallet availability detection, and graceful handling
+ * of wallet signature rejections during sync probes.
  */
 
 import type { ToastType } from "@/app/context/ToastContext";
@@ -10,7 +10,27 @@ export type SyncNetwork = "mainnet" | "testnet";
 
 export type SyncToastHandler = (message: string, type: ToastType) => void;
 
+export type WalletAvailabilityStatus =
+  | "available"
+  | "unavailable"
+  | "error";
+
+export interface WalletAvailabilityState {
+  available: boolean;
+  status: WalletAvailabilityStatus;
+  /** User-facing setup instructions when the wallet extension is missing. */
+  setupInstruction: string | null;
+  warningMessage: string | null;
+}
+
 const LOG_PREFIX = "[network_sync_checker]";
+
+/** Install URL for Freighter — the primary recommended Stellar extension. */
+export const WALLET_INSTALL_URL = "https://www.freighter.app/";
+
+/** Fallback copy shown when no supported wallet extension is detected. */
+export const WALLET_SETUP_INSTRUCTION =
+  "No wallet extension detected. Install a supported Stellar wallet (Freighter, Albedo, xBull, or Hana) and refresh this page to continue.";
 
 export interface NetworkSyncState {
   synced: boolean;
@@ -100,4 +120,77 @@ export async function validateNetworkSyncWithSignature<T>(
     return null;
   }
   return runNetworkSyncSign(signFn, showToast);
+}
+
+/**
+ * Detects whether a supported Stellar wallet extension is present in the
+ * browser. Accepts an optional detector for tests / non-browser runtimes.
+ */
+export function detectWalletExtension(detector?: () => boolean): boolean {
+  if (detector) {
+    return detector();
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const w = window as unknown as Record<string, unknown>;
+  return !!(
+    w["freighterApi"] ||
+    w["freighter"] ||
+    w["albedo"] ||
+    w["xBullSDK"] ||
+    w["hanaWallet"]
+  );
+}
+
+/**
+ * Checks wallet extension availability and returns fallback setup instructions
+ * when the extension is missing or the check itself throws.
+ */
+export function checkWalletAvailability(
+  detector?: () => boolean
+): WalletAvailabilityState {
+  try {
+    const available = detectWalletExtension(detector);
+    if (available) {
+      return {
+        available: true,
+        status: "available",
+        setupInstruction: null,
+        warningMessage: null,
+      };
+    }
+    return {
+      available: false,
+      status: "unavailable",
+      setupInstruction: WALLET_SETUP_INSTRUCTION,
+      warningMessage: WALLET_SETUP_INSTRUCTION,
+    };
+  } catch (err) {
+    console.warn(
+      `${LOG_PREFIX} wallet availability check failed:`,
+      err instanceof Error ? err.message : err
+    );
+    return {
+      available: false,
+      status: "error",
+      setupInstruction: WALLET_SETUP_INSTRUCTION,
+      warningMessage: `Unable to verify wallet availability. ${WALLET_SETUP_INSTRUCTION}`,
+    };
+  }
+}
+
+/**
+ * Runs a wallet availability check and surfaces a warning toast when the
+ * extension is missing or the check errors.
+ */
+export function warnOnMissingWallet(
+  showToast: SyncToastHandler,
+  detector?: () => boolean
+): WalletAvailabilityState {
+  const state = checkWalletAvailability(detector);
+  if (!state.available && state.warningMessage) {
+    showToast(state.warningMessage, "warning");
+  }
+  return state;
 }
