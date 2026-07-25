@@ -27,6 +27,67 @@ export interface FreighterAvailabilityState {
 
 export type FreighterToastHandler = (message: string, type: ToastType) => void;
 
+/** Default bound for Freighter signature requests. */
+export const DEFAULT_FREIGHTER_SIGNATURE_TIMEOUT_MS = 60_000;
+
+export interface FreighterSignRequest {
+  xdr: string;
+  /** Sensitive buffer cleared on timeout / completion. */
+  payload?: Uint8Array | null;
+}
+
+export class FreighterSignatureTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Freighter signature timed out after ${timeoutMs}ms`);
+    this.name = "FreighterSignatureTimeoutError";
+  }
+}
+
+/** Zeroes and drops a sensitive buffer so it cannot be retained after abort. */
+export function clearFreighterSensitiveMemory(
+  request: FreighterSignRequest
+): FreighterSignRequest {
+  if (request.payload) {
+    request.payload.fill(0);
+  }
+  request.payload = null;
+  return request;
+}
+
+/**
+ * Races a Freighter signature operation against a timeout clock. On timeout
+ * the operation is aborted and any sensitive payload memory is cleared.
+ */
+export async function signFreighterWithTimeout<T>(
+  request: FreighterSignRequest,
+  signFn: (xdr: string) => Promise<T>,
+  timeoutMs: number = DEFAULT_FREIGHTER_SIGNATURE_TIMEOUT_MS
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      clearFreighterSensitiveMemory(request);
+      reject(new FreighterSignatureTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
+    clearFreighterSensitiveMemory(request);
+    return result;
+  } catch (err) {
+    if (timedOut || err instanceof FreighterSignatureTimeoutError) {
+      clearFreighterSensitiveMemory(request);
+    }
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /**
  * Detects whether the Freighter browser extension is present. Accepts an
  * optional detector override for tests / non-browser runtimes.
