@@ -3,11 +3,17 @@ import {
   checkNetworkMatch,
   clearSensitiveMemory,
   DEFAULT_SIGNATURE_TIMEOUT_MS,
+  formatConsoleWarningBlock,
+  formatStackTrace,
   isUserRejectedError,
   LedgerSignatureTimeoutError,
+  LedgerTransactionTracker,
+  ledgerTracker,
   LedgerUserRejectedError,
+  logLedgerWarning,
   signCatchingRejection,
   signWithTimeout,
+  warnOnLedgerNetworkMismatch,
   type LedgerSignRequest,
   type LedgerSignResult,
 } from "@/app/lib/ledger_usb_bridge";
@@ -115,7 +121,9 @@ describe("ledger_usb_bridge user rejection handling", () => {
     expect(warnSpy).toHaveBeenCalled();
     const logged = String(warnSpy.mock.calls[0][0]);
     expect(logged).toContain("[ledger_usb_bridge]");
-    expect(logged).toContain("signature rejected");
+    expect(logged).toContain("SIGNATURE REJECTED");
+    expect(logged).toContain("--- stack trace ---");
+    expect(logged).toContain("user rejected transaction");
   });
 
   it("re-throws non-rejection errors without toasting", async () => {
@@ -156,5 +164,94 @@ describe("ledger_usb_bridge network mismatch checks", () => {
     expect(state.warningMessage).toMatch(/Network mismatch/i);
     expect(state.warningMessage).toMatch(/Mainnet/);
     expect(state.warningMessage).toMatch(/Testnet/);
+  });
+});
+
+describe("ledger_usb_bridge console warning blocks", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    ledgerTracker.clear();
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("formats stack traces from Error instances", () => {
+    const err = new Error("sign failed");
+    const stack = formatStackTrace(err);
+
+    expect(stack).toContain("Error: sign failed");
+    expect(stack).toMatch(/at /);
+  });
+
+  it("builds a console warning block that includes the stack trace format", () => {
+    const stack = formatStackTrace(new Error("tx debug"));
+    const block = formatConsoleWarningBlock({
+      title: "TX SIGNING",
+      body: "Awaiting Ledger signature",
+      stack,
+      txId: "tx-ledger-1",
+      phase: "signing",
+    });
+
+    expect(block).toContain("[ledger_usb_bridge]");
+    expect(block).toContain("TX SIGNING");
+    expect(block).toContain("Awaiting Ledger signature");
+    expect(block).toContain("txId: tx-ledger-1");
+    expect(block).toContain("phase: signing");
+    expect(block).toContain("--- stack trace ---");
+    expect(block).toContain("--- end stack ---");
+    expect(block).toContain("Error: tx debug");
+  });
+
+  it("logs formatted warning blocks (with stack) via console.warn", () => {
+    const formatted = logLedgerWarning("TX ERROR", "USB transport failed", {
+      err: new Error("device busy"),
+      txId: "tx-2",
+      phase: "error",
+    });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(formatted);
+    expect(formatted).toMatch(/--- stack trace ---[\s\S]*Error: device busy/);
+  });
+
+  it("tracks transaction phases and logs a warning block per phase", () => {
+    const tracker = new LedgerTransactionTracker();
+
+    tracker.track("tx-99", "building", "Preparing XDR");
+    tracker.track("tx-99", "signing", "Prompting Ledger device");
+    tracker.track(
+      "tx-99",
+      "error",
+      "Ledger returned failure",
+      new Error("locked device")
+    );
+
+    const history = tracker.getHistory("tx-99");
+    expect(history).toHaveLength(3);
+    expect(history.map((e) => e.phase)).toEqual([
+      "building",
+      "signing",
+      "error",
+    ]);
+    expect(history[2].stack).toContain("Error: locked device");
+    expect(warnSpy).toHaveBeenCalledTimes(3);
+
+    const lastCall = String(warnSpy.mock.calls[2][0]);
+    expect(lastCall).toContain("TX ERROR");
+    expect(lastCall).toContain("--- stack trace ---");
+  });
+
+  it("warnOnLedgerNetworkMismatch logs a formatted block on mismatch", () => {
+    const state = warnOnLedgerNetworkMismatch("mainnet", "testnet");
+    expect(state.mismatched).toBe(true);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const logged = String(warnSpy.mock.calls[0][0]);
+    expect(logged).toContain("NETWORK MISMATCH");
+    expect(logged).toContain("--- stack trace ---");
   });
 });
