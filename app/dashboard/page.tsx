@@ -276,6 +276,19 @@ export default function Dashboard() {
     };
   }, [expandedJobId, fetchJobDetails]);
 
+  useEffect(() => {
+    if (!address) return;
+
+    const interval = setInterval(() => {
+      void fetchJobs();
+      if (expandedJobId) {
+        void fetchJobDetails(expandedJobId, true);
+      }
+    }, 30_000);
+
+    return () => clearInterval(interval);
+  }, [address, expandedJobId, fetchJobs, fetchJobDetails]);
+
   const expandedJob = expandedJobId ? jobDetails[expandedJobId] ?? null : null;
   const milestoneList = Array.isArray(expandedJob?.milestones)
     ? expandedJob.milestones
