@@ -10,6 +10,86 @@ import {
   warnOnRabeNetworkMismatch,
 } from "@/app/lib/rabe_connector";
 
+describe("rabe_connector formatStackTrace edge cases", () => {
+  it("returns a string error as-is when it already contains a stack-like format", () => {
+    const multiline = "Error: boom\n    at foo (file.ts:1:1)";
+    expect(formatStackTrace(multiline)).toBe(multiline);
+  });
+
+  it("synthesizes a stack using a plain string message with no newline", () => {
+    const stack = formatStackTrace("sign rejected");
+    expect(stack).toContain("Error: sign rejected");
+    expect(stack.split("\n").length).toBeGreaterThan(1);
+  });
+
+  it("synthesizes a default stack when an Error instance has no stack property", () => {
+    const err = new Error("no stack here");
+    Object.defineProperty(err, "stack", { value: undefined });
+
+    const stack = formatStackTrace(err);
+    expect(stack).toContain("Error: Rabe connector trace");
+  });
+});
+
+describe("rabe_connector formatConsoleWarningBlock edge cases", () => {
+  it("truncates titles longer than the padded column width", () => {
+    const longTitle = "A".repeat(50);
+    const block = formatConsoleWarningBlock({
+      title: longTitle,
+      body: "body text",
+      stack: "Error: stack",
+    });
+
+    const titleLine = block.split("\n")[1];
+    expect(titleLine).toContain("A".repeat(36));
+    expect(titleLine).not.toContain("A".repeat(37));
+  });
+
+  it("omits txId and phase lines when they are not provided", () => {
+    const block = formatConsoleWarningBlock({
+      title: "NO EXTRAS",
+      body: "just body and stack",
+      stack: "Error: stack",
+    });
+
+    expect(block).not.toContain("txId:");
+    expect(block).not.toContain("phase:");
+  });
+});
+
+describe("rabe_connector logRabeWarning without options", () => {
+  it("logs a warning block using only title and body", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const formatted = logRabeWarning("PLAIN WARNING", "no extra context");
+
+    expect(warnSpy).toHaveBeenCalledWith(formatted);
+    expect(formatted).toContain("PLAIN WARNING");
+    expect(formatted).toContain("no extra context");
+    expect(formatted).not.toContain("txId:");
+    expect(formatted).not.toContain("phase:");
+
+    warnSpy.mockRestore();
+  });
+});
+
+describe("rabe_connector shared rabeTracker singleton", () => {
+  beforeEach(() => {
+    rabeTracker.clear();
+  });
+
+  it("tracks entries independently of ad-hoc tracker instances", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    rabeTracker.track("tx-shared", "submitting", "Broadcasting to network");
+
+    expect(rabeTracker.getHistory("tx-shared")).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    warnSpy.mockRestore();
+  });
+});
+
 describe("rabe_connector console warning blocks", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
