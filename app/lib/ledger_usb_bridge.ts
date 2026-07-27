@@ -196,6 +196,86 @@ export function clearSensitiveMemory(
   return request;
 }
 
+// Global tracking of active ledger_usb_bridge operations to support concurrency
+let activeOperationsCount = 0;
+const listeners = new Set<(isLoading: boolean) => void>();
+
+export function isLedgerLoading(): boolean {
+  return activeOperationsCount > 0;
+}
+
+export function subscribeToLedgerLoading(
+  listener: (isLoading: boolean) => void
+): () => void {
+  listeners.add(listener);
+  // Initial emit
+  listener(activeOperationsCount > 0);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notifyListeners(): void {
+  const loading = activeOperationsCount > 0;
+  listeners.forEach((l) => l(loading));
+}
+
+export function startLedgerOperation(): void {
+  activeOperationsCount++;
+  notifyListeners();
+}
+
+export function endLedgerOperation(): void {
+  activeOperationsCount = Math.max(0, activeOperationsCount - 1);
+  notifyListeners();
+}
+
+export function resetLedgerOperations(): void {
+  activeOperationsCount = 0;
+  notifyListeners();
+}
+
+/**
+ * Executes an async ledger operation wrapped in the loading overlay lifecycle.
+ * Uses a try/finally pattern to ensure the loader is hidden even on errors.
+ */
+export async function withLedgerLoader<T>(fn: () => Promise<T>): Promise<T> {
+  startLedgerOperation();
+  try {
+    return await fn();
+  } finally {
+    endLedgerOperation();
+  }
+}
+
+/**
+ * Mock/Placeholder for connect operation wrapped in the loader lifecycle.
+ */
+export async function connectLedgerDevice(delayMs = 50): Promise<void> {
+  return withLedgerLoader(async () => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  });
+}
+
+/**
+ * Mock/Placeholder for app open operation wrapped in the loader lifecycle.
+ */
+export async function openLedgerApp(delayMs = 50): Promise<void> {
+  return withLedgerLoader(async () => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  });
+}
+
+/**
+ * Mock/Placeholder for getting public address wrapped in the loader lifecycle.
+ */
+export async function getLedgerAddress(delayMs = 50): Promise<string> {
+  return withLedgerLoader(async () => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return "G...";
+  });
+}
+
 /**
  * Races a signature operation against a timeout clock. On timeout the
  * operation is considered aborted and any sensitive payload memory is cleared.
@@ -217,7 +297,9 @@ export async function signWithTimeout(
   });
 
   try {
-    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
+    const result = await withLedgerLoader(() =>
+      Promise.race([signFn(request.xdr), timeoutPromise])
+    );
     clearSensitiveMemory(request);
     return result;
   } catch (err) {
@@ -238,23 +320,25 @@ export async function signCatchingRejection(
   signFn: () => Promise<LedgerSignResult>,
   showToast: LedgerToastHandler
 ): Promise<LedgerSignResult | null> {
-  try {
-    return await signFn();
-  } catch (err) {
-    if (isUserRejectedError(err)) {
-      logLedgerWarning(
-        "SIGNATURE REJECTED",
-        err instanceof Error ? err.message : String(err),
-        { err, phase: "signing" }
-      );
-      showToast(
-        "Transaction cancelled — you rejected the signature on your Ledger.",
-        "warning"
-      );
-      return null;
+  return withLedgerLoader(async () => {
+    try {
+      return await signFn();
+    } catch (err) {
+      if (isUserRejectedError(err)) {
+        logLedgerWarning(
+          "SIGNATURE REJECTED",
+          err instanceof Error ? err.message : String(err),
+          { err, phase: "signing" }
+        );
+        showToast(
+          "Transaction cancelled — you rejected the signature on your Ledger.",
+          "warning"
+        );
+        return null;
+      }
+      throw err;
     }
-    throw err;
-  }
+  });
 }
 
 export interface NetworkMismatchState {
