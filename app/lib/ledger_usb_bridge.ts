@@ -539,7 +539,7 @@ export class LedgerActiveAddressStore {
   }
 
   getActiveAddresses(): LedgerActiveAddress[] {
-    return [...this.addresses];
+    return this.addresses.map((a) => ({ ...a }));
   }
 
   addOrUpdateAddress(address: LedgerActiveAddress): void {
