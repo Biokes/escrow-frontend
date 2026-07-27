@@ -217,6 +217,56 @@ describe("LedgerUsbBridge transport availability integration", () => {
     );
   });
 
+  it("disables both action buttons when transport is unavailable", () => {
+    render(
+      <LedgerUsbBridge
+        walletNetwork="testnet"
+        appNetwork="testnet"
+        signTransaction={vi.fn()}
+        showToast={vi.fn()}
+        detector={UNAVAILABLE_TRANSPORT}
+      />
+    );
+
+    const checkBtn = screen.getByRole("button", { name: "Check Ledger network" });
+    const signBtn = screen.getByRole("button", { name: "Sign via Ledger" });
+
+    expect(checkBtn).toBeDisabled();
+    expect(signBtn).toBeDisabled();
+    expect(checkBtn).toHaveClass("disabled:opacity-40");
+    expect(checkBtn).toHaveClass("disabled:cursor-not-allowed");
+    expect(signBtn).toHaveClass("disabled:opacity-40");
+    expect(signBtn).toHaveClass("disabled:cursor-not-allowed");
+  });
+
+  it("disables both action buttons when precomputed availability state is unavailable", () => {
+    const availability: LedgerAvailabilityState = {
+      available: false,
+      status: "unavailable",
+      transportType: "none",
+      setupInstruction:
+        "Your browser does not support connecting to Ledger hardware wallets.",
+      warningMessage:
+        "Your browser does not support connecting to Ledger hardware wallets.",
+    };
+
+    render(
+      <LedgerUsbBridge
+        walletNetwork="testnet"
+        appNetwork="testnet"
+        signTransaction={vi.fn()}
+        showToast={vi.fn()}
+        availability={availability}
+      />
+    );
+
+    const checkBtn = screen.getByRole("button", { name: "Check Ledger network" });
+    const signBtn = screen.getByRole("button", { name: "Sign via Ledger" });
+
+    expect(checkBtn).toBeDisabled();
+    expect(signBtn).toBeDisabled();
+  });
+
   it("sets status to transport-unavailable on mount when transport is missing", () => {
     render(
       <LedgerUsbBridge
@@ -233,7 +283,7 @@ describe("LedgerUsbBridge transport availability integration", () => {
     );
   });
 
-  it("shows a warning toast when clicking the check-network button while transport is unavailable", () => {
+  it("shows setup instructions via warning banner (not toast) when transport is unavailable and buttons are disabled", () => {
     const showToast = vi.fn();
 
     render(
@@ -246,20 +296,22 @@ describe("LedgerUsbBridge transport availability integration", () => {
       />
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Check Ledger network" })
-    );
+    const checkBtn = screen.getByRole("button", { name: "Check Ledger network" });
+    expect(checkBtn).toBeDisabled();
 
-    expect(showToast).toHaveBeenCalledWith(
-      expect.stringMatching(/browser does not support/i),
-      "warning"
-    );
+    const banner = screen.getByTestId("ledger-wallet-warning-banner");
+    expect(banner).toBeInTheDocument();
+    expect(
+      screen.getByTestId("ledger-wallet-setup-instruction")
+    ).toHaveTextContent(/browser does not support/i);
+
+    expect(showToast).not.toHaveBeenCalled();
     expect(screen.getByTestId("ledger-usb-bridge-status")).toHaveTextContent(
       "transport-unavailable"
     );
   });
 
-  it("shows a warning toast when clicking the sign button while transport is unavailable", async () => {
+  it("does not invoke signTransaction when transport is unavailable (buttons are disabled, banner shows instructions)", () => {
     const signTransaction = vi.fn();
     const showToast = vi.fn();
 
@@ -273,13 +325,14 @@ describe("LedgerUsbBridge transport availability integration", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Sign via Ledger" }));
+    const signBtn = screen.getByRole("button", { name: "Sign via Ledger" });
+    expect(signBtn).toBeDisabled();
 
-    expect(showToast).toHaveBeenCalledWith(
-      expect.stringMatching(/browser does not support/i),
-      "warning"
-    );
     expect(signTransaction).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
+    expect(
+      screen.getByTestId("ledger-wallet-warning-banner")
+    ).toBeInTheDocument();
     expect(screen.getByTestId("ledger-usb-bridge-status")).toHaveTextContent(
       "transport-unavailable"
     );

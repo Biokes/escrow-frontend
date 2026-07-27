@@ -109,10 +109,20 @@ export default function LedgerUsbBridge({
   return (
     <div data-testid="ledger-usb-bridge">
       <LedgerWalletWarningBanner availability={transportState} />
-      <button type="button" onClick={handleCheckNetwork}>
+      <button
+        type="button"
+        onClick={handleCheckNetwork}
+        disabled={!transportState.available}
+        className="disabled:opacity-40 disabled:cursor-not-allowed"
+      >
         Check Ledger network
       </button>
-      <button type="button" onClick={handleSign}>
+      <button
+        type="button"
+        onClick={handleSign}
+        disabled={!transportState.available}
+        className="disabled:opacity-40 disabled:cursor-not-allowed"
+      >
         Sign via Ledger
       </button>
       <span data-testid="ledger-usb-bridge-status">{displayStatus}</span>
