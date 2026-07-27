@@ -451,7 +451,7 @@ describe("ledger_usb_bridge active address persistence", () => {
     expect(storage.getItem(LEDGER_ACTIVE_ADDRESSES_STORAGE_KEY)).toBeNull();
     expect(warnSpy).toHaveBeenCalled();
     const logged = warnSpy.mock.calls
-      .map((c) => String(c[0]))
+      .map((c: unknown[]) => String(c[0]))
       .join("\n");
     expect(logged).toContain("REHYDRATE FAILED");
   });
@@ -468,7 +468,7 @@ describe("ledger_usb_bridge active address persistence", () => {
     expect(store.getActiveAddresses()).toEqual([]);
     expect(storage.getItem(LEDGER_ACTIVE_ADDRESSES_STORAGE_KEY)).toBeNull();
     const logged = warnSpy.mock.calls
-      .map((c) => String(c[0]))
+      .map((c: unknown[]) => String(c[0]))
       .join("\n");
     expect(logged).toContain("REHYDRATE SCHEMA MISMATCH");
   });
