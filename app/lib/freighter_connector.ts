@@ -1,246 +1,199 @@
 /**
  * freighter_connector — Freighter browser wallet integration helpers:
- * gas/fee estimation warnings, console debug tracking, and transaction
- * lifecycle logging.
+ * extension availability detection, signature time limits, and graceful
+ * handling of user signature rejections.
  */
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import type { ToastType } from "@/app/context/ToastContext";
 
-export type FreighterTxPhase =
-  | "idle"
-  | "building"
-  | "simulating"
-  | "signing"
-  | "submitting"
-  | "success"
-  | "error";
+const LOG_PREFIX = "[freighter_connector]";
 
-export interface FreighterTxTrackEntry {
-  txId: string;
-  phase: FreighterTxPhase;
-  message: string;
-  timestamp: number;
-  stack?: string;
-}
+/** Install URL surfaced when no Freighter extension is detected. */
+export const FREIGHTER_INSTALL_URL = "https://www.freighter.app/";
 
-export interface FreighterConsoleWarningBlock {
-  title: string;
-  body: string;
-  stack: string;
-  txId?: string;
-  phase?: FreighterTxPhase;
-}
+/** Fallback copy shown when the Freighter extension is missing. */
+export const FREIGHTER_SETUP_INSTRUCTION =
+  "Freighter wallet extension not detected. Install Freighter and refresh this page to continue.";
 
-/** Simulation / fee estimation result as returned by Soroban RPC. */
-export interface FreighterSimulationResult {
-  /** Estimated fee in stroops (1 XLM = 10 000 000 stroops). */
-  fee: number;
-  /** Optional error string from the simulation response. */
-  error?: string;
-  /** Raw simulation error object when the RPC reports a failure. */
-  simulationError?: unknown;
-}
+export type FreighterAvailabilityStatus = "available" | "unavailable" | "error";
 
-export interface FreighterGasWarningState {
-  /** True when any fee-related warning should be displayed. */
-  hasWarning: boolean;
-  /** True when the fee exceeds the HIGH_FEE_THRESHOLD_STROOPS ceiling. */
-  highFee: boolean;
-  /** True when the simulation itself reported an error. */
-  simulationError: boolean;
-  /** Human-readable warning message, or null when no warning applies. */
+export interface FreighterAvailabilityState {
+  available: boolean;
+  status: FreighterAvailabilityStatus;
+  /** User-facing setup instructions when the extension is missing. */
+  setupInstruction: string | null;
   warningMessage: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+export type FreighterToastHandler = (message: string, type: ToastType) => void;
 
-const WARN_PREFIX = "[freighter_connector]";
+/** Default bound for Freighter signature requests. */
+export const DEFAULT_FREIGHTER_SIGNATURE_TIMEOUT_MS = 60_000;
+
+export interface FreighterSignRequest {
+  xdr: string;
+  /** Sensitive buffer cleared on timeout / completion. */
+  payload?: Uint8Array | null;
+}
+
+export class FreighterSignatureTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Freighter signature timed out after ${timeoutMs}ms`);
+    this.name = "FreighterSignatureTimeoutError";
+  }
+}
+
+/** Zeroes and drops a sensitive buffer so it cannot be retained after abort. */
+export function clearFreighterSensitiveMemory(
+  request: FreighterSignRequest
+): FreighterSignRequest {
+  if (request.payload) {
+    request.payload.fill(0);
+  }
+  request.payload = null;
+  return request;
+}
 
 /**
- * Fee ceiling above which a high-fee warning is emitted.
- * 1 000 000 stroops = 0.1 XLM — conservative upper bound for typical
- * Soroban contract invocations on Testnet / Mainnet.
+ * Races a Freighter signature operation against a timeout clock. On timeout
+ * the operation is aborted and any sensitive payload memory is cleared.
  */
-export const HIGH_FEE_THRESHOLD_STROOPS = 1_000_000;
+export async function signFreighterWithTimeout<T>(
+  request: FreighterSignRequest,
+  signFn: (xdr: string) => Promise<T>,
+  timeoutMs: number = DEFAULT_FREIGHTER_SIGNATURE_TIMEOUT_MS
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
 
-// ---------------------------------------------------------------------------
-// Stack trace helpers
-// ---------------------------------------------------------------------------
-
-/** Captures a normalized stack string from an error or the current call site. */
-export function formatStackTrace(err?: unknown): string {
-  if (err instanceof Error && err.stack) {
-    return err.stack;
-  }
-
-  if (typeof err === "string" && err.includes("\n")) {
-    return err;
-  }
-
-  const synthetic = new Error(
-    typeof err === "string" ? err : "Freighter connector trace"
-  );
-  return synthetic.stack ?? "Error: Freighter connector trace";
-}
-
-// ---------------------------------------------------------------------------
-// Console warning block helpers
-// ---------------------------------------------------------------------------
-
-/** Builds a multi-line console warning block for transaction debug tracking. */
-export function formatConsoleWarningBlock(
-  block: FreighterConsoleWarningBlock
-): string {
-  const lines = [
-    `${WARN_PREFIX} ╔══════════════════════════════════════╗`,
-    `${WARN_PREFIX} ║ ${block.title.padEnd(36).slice(0, 36)} ║`,
-    `${WARN_PREFIX} ╚══════════════════════════════════════╝`,
-    `${WARN_PREFIX} ${block.body}`,
-  ];
-
-  if (block.txId) {
-    lines.push(`${WARN_PREFIX} txId: ${block.txId}`);
-  }
-  if (block.phase) {
-    lines.push(`${WARN_PREFIX} phase: ${block.phase}`);
-  }
-
-  lines.push(`${WARN_PREFIX} --- stack trace ---`);
-  for (const frame of block.stack.split("\n")) {
-    lines.push(`${WARN_PREFIX} ${frame}`);
-  }
-  lines.push(`${WARN_PREFIX} --- end stack ---`);
-
-  return lines.join("\n");
-}
-
-/** Logs a formatted warning block (including stack) to the console. */
-export function logFreighterWarning(
-  title: string,
-  body: string,
-  options?: { err?: unknown; txId?: string; phase?: FreighterTxPhase }
-): string {
-  const stack = formatStackTrace(options?.err);
-  const formatted = formatConsoleWarningBlock({
-    title,
-    body,
-    stack,
-    txId: options?.txId,
-    phase: options?.phase,
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      clearFreighterSensitiveMemory(request);
+      reject(new FreighterSignatureTimeoutError(timeoutMs));
+    }, timeoutMs);
   });
-  console.warn(formatted);
-  return formatted;
-}
 
-// ---------------------------------------------------------------------------
-// Gas / fee estimation warning
-// ---------------------------------------------------------------------------
-
-/**
- * Inspects a simulation result and produces a user-facing warning state
- * when fee limits exceed standard bounds or the simulation reported an error.
- */
-export function checkSimulationFeeWarning(
-  result: FreighterSimulationResult
-): FreighterGasWarningState {
-  if (result.error || result.simulationError) {
-    const message =
-      typeof result.error === "string" && result.error
-        ? `Transaction simulation failed: ${result.error}`
-        : "Transaction simulation failed. The contract may have rejected this operation.";
-
-    return {
-      hasWarning: true,
-      highFee: false,
-      simulationError: true,
-      warningMessage: message,
-    };
+  try {
+    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
+    clearFreighterSensitiveMemory(request);
+    return result;
+  } catch (err) {
+    if (timedOut || err instanceof FreighterSignatureTimeoutError) {
+      clearFreighterSensitiveMemory(request);
+    }
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
-
-  if (result.fee > HIGH_FEE_THRESHOLD_STROOPS) {
-    const xlm = (result.fee / 10_000_000).toFixed(7);
-    return {
-      hasWarning: true,
-      highFee: true,
-      simulationError: false,
-      warningMessage: `Estimated fee is unusually high (${result.fee} stroops / ${xlm} XLM). Review before signing.`,
-    };
-  }
-
-  return {
-    hasWarning: false,
-    highFee: false,
-    simulationError: false,
-    warningMessage: null,
-  };
 }
 
 /**
- * Inspects a simulation result and, when a warning applies, emits a
- * formatted console warning block with a stack trace via the shared
- * freighter_connector debug machinery.
+ * Detects whether the Freighter browser extension is present. Accepts an
+ * optional detector override for tests / non-browser runtimes.
  */
-export function warnOnSimulationFee(
-  result: FreighterSimulationResult,
-  options?: { txId?: string }
-): FreighterGasWarningState {
-  const state = checkSimulationFeeWarning(result);
-
-  if (state.hasWarning && state.warningMessage) {
-    const title = state.simulationError ? "SIMULATION ERROR" : "HIGH FEE WARNING";
-    logFreighterWarning(title, state.warningMessage, {
-      err: new Error(state.warningMessage),
-      txId: options?.txId,
-      phase: "simulating",
-    });
+export function detectFreighterExtension(detector?: () => boolean): boolean {
+  if (detector) {
+    return detector();
   }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const w = window as unknown as Record<string, unknown>;
+  return !!(w["freighterApi"] || w["freighter"]);
+}
 
+/**
+ * Checks Freighter extension availability and returns fallback setup
+ * instructions when the extension is missing or the check itself throws.
+ */
+export function checkFreighterAvailability(
+  detector?: () => boolean
+): FreighterAvailabilityState {
+  try {
+    const available = detectFreighterExtension(detector);
+    if (available) {
+      return {
+        available: true,
+        status: "available",
+        setupInstruction: null,
+        warningMessage: null,
+      };
+    }
+    return {
+      available: false,
+      status: "unavailable",
+      setupInstruction: FREIGHTER_SETUP_INSTRUCTION,
+      warningMessage: FREIGHTER_SETUP_INSTRUCTION,
+    };
+  } catch (err) {
+    console.warn(
+      `${LOG_PREFIX} wallet availability check failed:`,
+      err instanceof Error ? err.message : err
+    );
+    return {
+      available: false,
+      status: "error",
+      setupInstruction: FREIGHTER_SETUP_INSTRUCTION,
+      warningMessage: `Unable to verify wallet availability. ${FREIGHTER_SETUP_INSTRUCTION}`,
+    };
+  }
+}
+
+/**
+ * Runs a Freighter availability check and surfaces a warning toast when the
+ * extension is missing or the check errors.
+ */
+export function warnOnMissingFreighter(
+  showToast: FreighterToastHandler,
+  detector?: () => boolean
+): FreighterAvailabilityState {
+  const state = checkFreighterAvailability(detector);
+  if (!state.available && state.warningMessage) {
+    showToast(state.warningMessage, "warning");
+  }
   return state;
 }
 
-// ---------------------------------------------------------------------------
-// Transaction tracker
-// ---------------------------------------------------------------------------
-
-export class FreighterTransactionTracker {
-  private entries: FreighterTxTrackEntry[] = [];
-
-  track(
-    txId: string,
-    phase: FreighterTxPhase,
-    message: string,
-    err?: unknown
-  ): FreighterTxTrackEntry {
-    const entry: FreighterTxTrackEntry = {
-      txId,
-      phase,
-      message,
-      timestamp: Date.now(),
-      stack: formatStackTrace(err),
-    };
-    this.entries.push(entry);
-
-    logFreighterWarning(`TX ${phase.toUpperCase()}`, message, {
-      err,
-      txId,
-      phase,
-    });
-
-    return entry;
-  }
-
-  getHistory(txId?: string): FreighterTxTrackEntry[] {
-    if (!txId) return [...this.entries];
-    return this.entries.filter((e) => e.txId === txId);
-  }
-
-  clear(): void {
-    this.entries = [];
+export class FreighterUserRejectedError extends Error {
+  constructor(message = "user rejected transaction") {
+    super(message);
+    this.name = "FreighterUserRejectedError";
   }
 }
 
-export const freighterTracker = new FreighterTransactionTracker();
+export function isFreighterUserRejected(err: unknown): boolean {
+  if (err instanceof FreighterUserRejectedError) return true;
+  if (!(err instanceof Error)) return false;
+  const message = err.message.toLowerCase();
+  return (
+    message.includes("user rejected") ||
+    message.includes("user declined") ||
+    message.includes("request rejected") ||
+    message.includes("denied by the user")
+  );
+}
+
+/**
+ * Runs a Freighter signature step. Catches "user rejected transaction"
+ * exceptions, logs them, and shows a warning toast instead of surfacing a
+ * raw error to the caller.
+ */
+export async function runFreighterSign<T>(
+  signFn: () => Promise<T>,
+  showToast: FreighterToastHandler
+): Promise<T | null> {
+  try {
+    return await signFn();
+  } catch (err) {
+    if (isFreighterUserRejected(err)) {
+      console.warn(
+        `${LOG_PREFIX} signature rejected by user:`,
+        err instanceof Error ? err.message : err
+      );
+      showToast("Signature cancelled — you rejected the request in your wallet.", "warning");
+      return null;
+    }
+    throw err;
+  }
+}
