@@ -296,7 +296,14 @@ export class FreighterActiveAddressStore {
     }
   }
 
-  private rehydrate(): void {
+  /**
+   * Re-reads persisted state from storage into memory. Public because
+   * simulating a reload (which triggers rehydration) is a legitimate
+   * externally-verifiable behavior: consumers and tests both need to
+   * confirm that a freshly-bootstrapped store correctly restores its
+   * state from whatever is in storage right now.
+   */
+  rehydrate(): void {
     this.activeAddress = null;
     if (!this.storage) return;
     try {
@@ -323,6 +330,19 @@ export class FreighterActiveAddressStore {
         // no-op — best effort cleanup
       }
     }
+  }
+
+  /**
+   * Replaces the storage backend used by this store instance and
+   * immediately re-reads state from the new backend. Intended as a
+   * narrow test-support seam so tests can supply an in-memory Storage
+   * mock without reaching into the private `storage` field. Safe to
+   * call at runtime as well (e.g. to swap to sessionStorage in a
+   * security-sensitive mode).
+   */
+  overrideStorage(nextStorage: Storage | null): void {
+    this.storage = nextStorage;
+    this.rehydrate();
   }
 
   setActiveAddress(address: FreighterActiveAddress | null): void {

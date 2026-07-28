@@ -44,20 +44,20 @@ function makeAddress(overrides: Partial<FreighterActiveAddress> = {}): Freighter
 describe("freighter_connector active address persistence", () => {
   let storage: Storage;
   let warnSpy: ReturnType<typeof vi.spyOn>;
-  let originalStorage: unknown;
+  let originalStorageRef: Storage | null;
 
   beforeEach(() => {
     storage = createMockStorage();
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    originalStorage = (freighterActiveAddress as { storage: unknown }).storage;
-    (freighterActiveAddress as { storage: Storage | null }).storage = storage;
-    (freighterActiveAddress as { rehydrate: () => void }).rehydrate();
+    originalStorageRef = null;
+    freighterActiveAddress.overrideStorage(storage);
+    freighterActiveAddress.clear();
   });
 
   afterEach(() => {
     warnSpy.mockRestore();
-    (freighterActiveAddress as { storage: unknown }).storage = originalStorage;
-    (freighterActiveAddress as { rehydrate: () => void }).rehydrate();
+    freighterActiveAddress.clear();
+    freighterActiveAddress.overrideStorage(originalStorageRef);
   });
 
   it("initializes to empty state when storage is empty", () => {
@@ -148,8 +148,9 @@ describe("freighter_connector active address persistence", () => {
     const result = store.getActiveAddress();
     expect(result).not.toBeNull();
     expect(result!.address).toBe("G...");
-    expect((result as Record<string, unknown>).privateKey).toBeUndefined();
-    expect((result as Record<string, unknown>).seed).toBeUndefined();
+    const bag = result ?? {};
+    expect("privateKey" in bag).toBe(false);
+    expect("seed" in bag).toBe(false);
   });
 
   it("returns defensive copies from getActiveAddress to prevent mutation", () => {
