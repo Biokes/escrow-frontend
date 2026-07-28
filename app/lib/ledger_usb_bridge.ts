@@ -1,11 +1,36 @@
 /**
  * Ledger USB bridge — hardware wallet transport helpers:
- * signature timeouts, rejection handling, and network mismatch checks.
+ * WebUSB/WebHID transport availability detection, signature timeouts,
+ * rejection handling, and network mismatch checks.
  */
 
 import type { ToastType } from "@/app/context/ToastContext";
 
 export const DEFAULT_SIGNATURE_TIMEOUT_MS = 60_000;
+
+/** Official Ledger setup/support URL surfaced when the browser transport is unsupported. */
+export const LEDGER_SETUP_URL = "https://support.ledger.com/article/4404389482525-connect-my-ledger-to-ledger-live";
+
+/** Supported browsers list shown in setup instructions. */
+export const LEDGER_SUPPORTED_BROWSERS = "Chrome, Edge, Brave, or Opera";
+
+/** Fallback copy shown when WebUSB/WebHID transport is not available in the user's browser. */
+export const LEDGER_SETUP_INSTRUCTION =
+  "Your browser does not support connecting to Ledger hardware wallets. Ledger USB connections require WebUSB or WebHID support. Please switch to a supported browser (" +
+  LEDGER_SUPPORTED_BROWSERS +
+  ") and ensure your Ledger is connected via USB cable (not Bluetooth).";
+
+export type LedgerTransportStatus = "available" | "unavailable" | "error";
+
+export interface LedgerAvailabilityState {
+  available: boolean;
+  status: LedgerTransportStatus;
+  /** Which transport API was detected (if any), for debug/context. */
+  transportType: "webusb" | "webhid" | "both" | "none";
+  /** User-facing setup instructions when the transport is missing. */
+  setupInstruction: string | null;
+  warningMessage: string | null;
+}
 
 export type LedgerNetwork = "mainnet" | "testnet";
 
@@ -46,6 +71,108 @@ export interface LedgerConsoleWarningBlock {
 }
 
 const WARN_PREFIX = "[ledger_usb_bridge]";
+
+/**
+ * Detects whether the current browser environment supports the required
+ * transport APIs for Ledger hardware wallet connections (WebUSB or WebHID).
+ * Accepts an optional detector override for tests / non-browser runtimes.
+ *
+ * Note: this only checks API availability, not whether a device is actually
+ * plugged in. "Available transport ≠ device connected".
+ */
+export function detectLedgerTransport(
+  detector?: () => { hasWebUsb: boolean; hasWebHid: boolean }
+): { hasWebUsb: boolean; hasWebHid: boolean } {
+  if (detector) {
+    return detector();
+  }
+  if (typeof navigator === "undefined") {
+    return { hasWebUsb: false, hasWebHid: false };
+  }
+  const nav = navigator as unknown as Record<string, unknown>;
+  return {
+    hasWebUsb: typeof nav["usb"] !== "undefined",
+    hasWebHid: typeof nav["hid"] !== "undefined",
+  };
+}
+
+/**
+ * Normalizes the raw transport detection result into a single transport type
+ * label used for debug/context in the availability state.
+ */
+export function classifyTransportType(
+  hasWebUsb: boolean,
+  hasWebHid: boolean
+): LedgerAvailabilityState["transportType"] {
+  if (hasWebUsb && hasWebHid) return "both";
+  if (hasWebUsb) return "webusb";
+  if (hasWebHid) return "webhid";
+  return "none";
+}
+
+/**
+ * Checks Ledger transport availability (WebUSB / WebHID browser support) and
+ * returns fallback setup instructions when neither transport is available or
+ * the check itself throws.
+ *
+ * Distinguishes three outcomes:
+ *   - "available"   → at least one transport API present; safe to attempt connect
+ *   - "unavailable" → no transport APIs; browser cannot talk to Ledger
+ *   - "error"       → the detector itself threw unexpectedly
+ */
+export function checkLedgerAvailability(
+  detector?: () => { hasWebUsb: boolean; hasWebHid: boolean }
+): LedgerAvailabilityState {
+  try {
+    const { hasWebUsb, hasWebHid } = detectLedgerTransport(detector);
+    const available = hasWebUsb || hasWebHid;
+    const transportType = classifyTransportType(hasWebUsb, hasWebHid);
+
+    if (available) {
+      return {
+        available: true,
+        status: "available",
+        transportType,
+        setupInstruction: null,
+        warningMessage: null,
+      };
+    }
+    return {
+      available: false,
+      status: "unavailable",
+      transportType,
+      setupInstruction: LEDGER_SETUP_INSTRUCTION,
+      warningMessage: LEDGER_SETUP_INSTRUCTION,
+    };
+  } catch (err) {
+    console.warn(
+      `${WARN_PREFIX} ledger transport availability check failed:`,
+      err instanceof Error ? err.message : err
+    );
+    return {
+      available: false,
+      status: "error",
+      transportType: "none",
+      setupInstruction: LEDGER_SETUP_INSTRUCTION,
+      warningMessage: `Unable to verify Ledger transport support. ${LEDGER_SETUP_INSTRUCTION}`,
+    };
+  }
+}
+
+/**
+ * Runs a Ledger transport availability check and surfaces a warning toast
+ * when the required browser APIs are missing or the check errors.
+ */
+export function warnOnMissingLedgerTransport(
+  showToast: LedgerToastHandler,
+  detector?: () => { hasWebUsb: boolean; hasWebHid: boolean }
+): LedgerAvailabilityState {
+  const state = checkLedgerAvailability(detector);
+  if (!state.available && state.warningMessage) {
+    showToast(state.warningMessage, "warning");
+  }
+  return state;
+}
 
 /** Captures a normalized stack string from an error or the current call site. */
 export function formatStackTrace(err?: unknown): string {
