@@ -29,6 +29,7 @@ describe("Navbar wallet selector", () => {
       connect: vi.fn(),
       disconnect: vi.fn(),
       isConnecting: false,
+      networkMismatchMessage: null,
       selectedWalletId: "freighter",
       setSelectedWalletId: vi.fn(),
     });
@@ -46,6 +47,7 @@ describe("Navbar wallet selector", () => {
       connect: vi.fn(),
       disconnect: vi.fn(),
       isConnecting: false,
+      networkMismatchMessage: null,
       selectedWalletId: "freighter",
       setSelectedWalletId,
     });
@@ -56,5 +58,22 @@ describe("Navbar wallet selector", () => {
     fireEvent.change(select, { target: { value: "albedo" } });
 
     expect(setSelectedWalletId).toHaveBeenCalledWith("albedo");
+  });
+
+  it("displays network mismatch warning when provided", () => {
+    mockUseWallet.mockReturnValue({
+      address: "G1234567890",
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      isConnecting: false,
+      networkMismatchMessage: "Network mismatch: your Freighter is on Mainnet but this app expects Stellar Testnet.",
+      selectedWalletId: "freighter",
+      setSelectedWalletId: vi.fn(),
+    });
+
+    render(<Navbar />);
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText(/Network mismatch/)).toBeInTheDocument();
   });
 });
