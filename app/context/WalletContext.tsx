@@ -13,10 +13,7 @@ import { defaultModules } from "@creit.tech/stellar-wallets-kit/modules/utils";
 import { NETWORK_PASSPHRASE } from "@/app/lib/contract";
 import { useToast } from "./ToastContext";
 import { ledgerActiveAddresses } from "@/app/lib/ledger_usb_bridge";
-import {
-  freighterActiveAddress,
-  verifyAndRehydrateFreighterAddress,
-} from "@/app/lib/freighter_connector";
+import { freighterActiveAddress, verifyAndRehydrateFreighterAddress } from "@/app/lib/freighter_connector";
 
 const STORAGE_KEY = "milesto_wallet_connected";
 
@@ -102,8 +99,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     let active = true;
 
     const rehydrate = async () => {
-      // For Freighter, try to rehydrate from persisted state and re-verify
-      // against the live Freighter API first. Live state is authoritative.
       if (selectedWalletId === "freighter") {
         try {
           const verifiedAddress = await verifyAndRehydrateFreighterAddress();
@@ -118,8 +113,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Fall back to the wallet kit for non-Freighter wallets or when
-      // Freighter rehydration found nothing / failed.
       StellarWalletsKit.getAddress()
         .then(async (result: { address?: string }) => {
           if (!active) return;
