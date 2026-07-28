@@ -35,4 +35,18 @@ describe("RabeNetworkWarningBar", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/Testnet/);
     expect(screen.getByRole("alert")).toHaveTextContent(/Mainnet/);
   });
+
+  it("appends a custom className onto the default classes", () => {
+    render(
+      <RabeNetworkWarningBar
+        walletNetwork="mainnet"
+        appNetwork="testnet"
+        className="custom-class"
+      />
+    );
+
+    expect(screen.getByTestId("rabe-network-warning-bar")).toHaveClass(
+      "custom-class"
+    );
+  });
 });
