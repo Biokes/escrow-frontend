@@ -1,7 +1,15 @@
+import {
+  Account,
+  Keypair,
+  Networks,
+  Operation,
+  TransactionBuilder,
+} from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import {
   applyMultiSigSignature,
   createMultiSigSplit,
+  createStellarEnvelopeParser,
   DEFAULT_MULTISIG_MIN_SIGNATURES,
   NetworkSyncMultiSigStructureError,
   parseMultiSigEnvelope,
@@ -130,6 +138,167 @@ describe("network_sync_checker multi-sig assembly (#159)", () => {
         sourceAccount: "GABCDEFG",
       });
       expect(shape.sourceAccount).toBe("GABCDEFG");
+    });
+  });
+
+  describe("parseMultiSigEnvelope XDR injection (#159+p)", () => {
+    it("prefers parseEnvelopeXdr over the byte-level heuristic", () => {
+      const xdr = validBase64(80); // byte heuristic would say 1 sig.
+      const shape = parseMultiSigEnvelope(xdr, {
+        parseEnvelopeXdr: () => ({
+          signatures: 3,
+          sourceAccount: "GFROM_PARSER",
+        }),
+      });
+      expect(shape.signatures).toBe(3);
+      expect(shape.sourceAccount).toBe("GFROM_PARSER");
+      expect(shape.signatureSlotIndices).toEqual([1, 2, 3]);
+    });
+
+    it("falls back to options.sourceAccount when parser returns null", () => {
+      const xdr = validBase64(80);
+      const shape = parseMultiSigEnvelope(xdr, {
+        parseEnvelopeXdr: () => ({ signatures: 1, sourceAccount: null }),
+        sourceAccount: "GFROM_OPTIONS",
+      });
+      expect(shape.sourceAccount).toBe("GFROM_OPTIONS");
+    });
+
+    it("returns null sourceAccount when parser and options both omit it", () => {
+      const xdr = validBase64(80);
+      const shape = parseMultiSigEnvelope(xdr, {
+        parseEnvelopeXdr: () => ({ signatures: 1, sourceAccount: null }),
+      });
+      expect(shape.sourceAccount).toBeNull();
+    });
+
+    it("treats empty-string parser sourceAccount as not authoritative", () => {
+      const xdr = validBase64(80);
+      const shape = parseMultiSigEnvelope(xdr, {
+        parseEnvelopeXdr: () => ({ signatures: 1, sourceAccount: "" }),
+        sourceAccount: "GFROM_OPTIONS",
+      });
+      expect(shape.sourceAccount).toBe("GFROM_OPTIONS");
+    });
+
+    it("allows a real XDR parser to return zero signatures without throwing", () => {
+      const xdr = validBase64(80);
+      // FeeBump / freshly built envelopes may legitimately have 0 sigs.
+      expect(() =>
+        parseMultiSigEnvelope(xdr, {
+          parseEnvelopeXdr: () => ({ signatures: 0, sourceAccount: null }),
+        })
+      ).not.toThrow();
+    });
+
+    it("re-throws parser throws as envelope_parse_failure", () => {
+      const xdr = validBase64(80);
+      expect(() =>
+        parseMultiSigEnvelope(xdr, {
+          parseEnvelopeXdr: () => {
+            throw new Error("XDR shape unexpected");
+          },
+        })
+      ).toThrowError(NetworkSyncMultiSigStructureError);
+      try {
+        parseMultiSigEnvelope(xdr, {
+          parseEnvelopeXdr: () => {
+            throw new Error("XDR shape unexpected");
+          },
+        });
+      } catch (err) {
+        const e = err as NetworkSyncMultiSigStructureError;
+        expect(e.code).toBe("envelope_parse_failure");
+        expect(e.message).toMatch(/XDR shape unexpected/);
+      }
+    });
+
+    it("raises envelope_parse_failure when parser returns an invalid shape", () => {
+      const xdr = validBase64(80);
+      expect(() =>
+        parseMultiSigEnvelope(xdr, {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          parseEnvelopeXdr: (() => ({ signatures: NaN })) as any,
+        })
+      ).toThrowError(NetworkSyncMultiSigStructureError);
+      try {
+        parseMultiSigEnvelope(xdr, {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          parseEnvelopeXdr: (() => ({ signatures: NaN })) as any,
+        });
+      } catch (err) {
+        expect((err as NetworkSyncMultiSigStructureError).code).toBe(
+          "envelope_parse_failure"
+        );
+      }
+    });
+
+    it("still throws missing_signatures via the countSignatures fallback only", () => {
+      const xdr = validBase64(80);
+      try {
+        parseMultiSigEnvelope(xdr, {
+          countSignatures: () => 0,
+        });
+      } catch (err) {
+        expect((err as NetworkSyncMultiSigStructureError).code).toBe(
+          "missing_signatures"
+        );
+      }
+    });
+
+    it("countSignatures fallback still reports the custom count", () => {
+      const xdr = validBase64(160);
+      const shape = parseMultiSigEnvelope(xdr, {
+        countSignatures: () => 5,
+      });
+      expect(shape.signatures).toBe(5);
+    });
+  });
+
+  describe("createStellarEnvelopeParser factory (#159+p)", () => {
+    it("eagerly rejects empty passphrases", () => {
+      expect(() => createStellarEnvelopeParser("")).toThrow(/non-empty/);
+      expect(() => createStellarEnvelopeParser("   ")).toThrow(/non-empty/);
+    });
+
+    it("returns real DecoratedSignature counts from a built Transaction envelope", () => {
+      const kp = Keypair.random();
+      const account = new Account(kp.publicKey(), "0");
+      const tx = new TransactionBuilder(account, {
+        fee: "100",
+        networkPassphrase: Networks.TESTNET,
+      })
+        .addOperation(Operation.bumpSequence({ bumpTo: "0" }))
+        .setTimeout(30)
+        .build();
+      const xdr = tx.toEnvelope().toXDR("base64");
+
+      function escapeRegExp(value: string): string {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      }
+      const parser = createStellarEnvelopeParser(Networks.TESTNET);
+      const shape = parseMultiSigEnvelope(xdr, { parseEnvelopeXdr: parser });
+      // Source account must come back as the G address we built from. stellar-sdk
+      // v13 may emit a muxed `M…` form rather than the bare `G` string, so we
+      // accept either an exact G match or a muxed substring containing the G key.
+      const expected = `^(${escapeRegExp(kp.publicKey())}|M.*${escapeRegExp(kp.publicKey())}.*)$`;
+      expect(shape.sourceAccount).toMatch(new RegExp(expected));
+    });
+
+    it("surfaces SDK failures as envelope_parse_failure", () => {
+      // Random bytes that aren't a real envelope — the SDK will throw on parse.
+      const bytes = validBase64(80);
+      const parser = createStellarEnvelopeParser(Networks.TESTNET);
+      expect(() =>
+        parseMultiSigEnvelope(bytes, { parseEnvelopeXdr: parser })
+      ).toThrowError(NetworkSyncMultiSigStructureError);
+      try {
+        parseMultiSigEnvelope(bytes, { parseEnvelopeXdr: parser });
+      } catch (err) {
+        expect((err as NetworkSyncMultiSigStructureError).code).toBe(
+          "envelope_parse_failure"
+        );
+      }
     });
   });
 
