@@ -1,6 +1,6 @@
 /**
- * Rabe wallet helper interface — formats console warnings and tracks
- * transaction lifecycle for debug visibility.
+ * Rabe wallet helper interface — formats console warnings, tracks transaction
+ * lifecycle for debug visibility, and checks wallet extension availability.
  */
 
 import type { ToastType } from "@/app/context/ToastContext";
@@ -193,61 +193,154 @@ export class RabeTransactionTracker {
 
 export const rabeTracker = new RabeTransactionTracker();
 
-// ---------------------------------------------------------------------------
-// User signature rejection handling (#135)
-// ---------------------------------------------------------------------------
+export const RABE_INSTALL_URL = "https://rabe.app/";
+
+/** Fallback copy shown when the Rabe extension is missing. */
+export const RABE_SETUP_INSTRUCTION =
+  "Rabe wallet extension not detected. Install Rabe and refresh this page to continue.";
+
+export type RabeAvailabilityStatus = "available" | "unavailable" | "error";
+
+export interface RabeAvailabilityState {
+  available: boolean;
+  status: RabeAvailabilityStatus;
+  /** User-facing setup instructions when the extension is missing. */
+  setupInstruction: string | null;
+  warningMessage: string | null;
+}
 
 export type RabeToastHandler = (message: string, type: ToastType) => void;
 
-export class RabeUserRejectedError extends Error {
-  constructor(message = "user rejected transaction") {
-    super(message);
-    this.name = "RabeUserRejectedError";
+/**
+ * Detects whether the Rabe browser extension is present. Accepts an optional
+ * detector override for tests / non-browser runtimes.
+ */
+export function detectRabeExtension(detector?: () => boolean): boolean {
+  if (detector) {
+    return detector();
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const w = window as unknown as Record<string, unknown>;
+  return !!(w["rabeApi"] || w["rabe"]);
+}
+
+/**
+ * Checks Rabe extension availability and returns fallback setup instructions
+ * when the extension is missing or the check itself throws.
+ */
+export function checkRabeAvailability(
+  detector?: () => boolean
+): RabeAvailabilityState {
+  try {
+    const available = detectRabeExtension(detector);
+    if (available) {
+      return {
+        available: true,
+        status: "available",
+        setupInstruction: null,
+        warningMessage: null,
+      };
+    }
+    return {
+      available: false,
+      status: "unavailable",
+      setupInstruction: RABE_SETUP_INSTRUCTION,
+      warningMessage: RABE_SETUP_INSTRUCTION,
+    };
+  } catch (err) {
+    logRabeWarning("WALLET UNAVAILABLE", "wallet availability check failed", {
+      err,
+    });
+    return {
+      available: false,
+      status: "error",
+      setupInstruction: RABE_SETUP_INSTRUCTION,
+      warningMessage: `Unable to verify wallet availability. ${RABE_SETUP_INSTRUCTION}`,
+    };
   }
 }
 
 /**
- * Returns true when the thrown value represents a deliberate user refusal to
- * sign — either a first-class RabeUserRejectedError or an Error whose message
- * matches common wallet rejection phrases.
+ * Runs a Rabe availability check and surfaces a warning toast when the
+ * extension is missing or the check errors.
  */
-export function isRabeUserRejected(err: unknown): boolean {
-  if (err instanceof RabeUserRejectedError) return true;
-  if (!(err instanceof Error)) return false;
-  const message = err.message.toLowerCase();
-  return (
-    message.includes("user rejected") ||
-    message.includes("user declined") ||
-    message.includes("request rejected") ||
-    message.includes("denied by the user")
-  );
+export function warnOnMissingRabe(
+  showToast: RabeToastHandler,
+  detector?: () => boolean
+): RabeAvailabilityState {
+  const state = checkRabeAvailability(detector);
+  if (!state.available && state.warningMessage) {
+    showToast(state.warningMessage, "warning");
+  }
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// Transaction signature time limit bounds (#134)
+// ---------------------------------------------------------------------------
+
+/** Default bound for Rabe signature requests (milliseconds). */
+export const DEFAULT_RABE_SIGNATURE_TIMEOUT_MS = 60_000;
+
+export interface RabeSignRequest {
+  xdr: string;
+  /** Sensitive buffer cleared on timeout / completion. */
+  payload?: Uint8Array | null;
+}
+
+export class RabeSignatureTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Rabe signature timed out after ${timeoutMs}ms`);
+    this.name = "RabeSignatureTimeoutError";
+  }
 }
 
 /**
- * Runs a Rabe signature step. Catches "user rejected transaction" exceptions,
- * logs them via the structured rabe_connector warning machinery, and shows a
- * warning toast instead of surfacing a raw error to the caller.
- *
- * Non-rejection errors are re-thrown unchanged so callers can handle them.
+ * Zeroes and drops a sensitive buffer so it cannot be retained after the
+ * operation is aborted or completes.
  */
-export async function runRabeSign<T>(
-  signFn: () => Promise<T>,
-  showToast: RabeToastHandler
-): Promise<T | null> {
+export function clearRabeSensitiveMemory(
+  request: RabeSignRequest
+): RabeSignRequest {
+  if (request.payload) {
+    request.payload.fill(0);
+  }
+  request.payload = null;
+  return request;
+}
+
+/**
+ * Races a Rabe signature operation against a timeout clock. On timeout the
+ * operation is aborted and any sensitive payload memory is cleared.
+ */
+export async function signRabeWithTimeout<T>(
+  request: RabeSignRequest,
+  signFn: (xdr: string) => Promise<T>,
+  timeoutMs: number = DEFAULT_RABE_SIGNATURE_TIMEOUT_MS
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      clearRabeSensitiveMemory(request);
+      reject(new RabeSignatureTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+
   try {
-    return await signFn();
+    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
+    clearRabeSensitiveMemory(request);
+    return result;
   } catch (err) {
-    if (isRabeUserRejected(err)) {
-      logRabeWarning("SIGNATURE REJECTED", "signature rejected by user", {
-        err,
-        phase: "signing",
-      });
-      showToast(
-        "Signature cancelled — you rejected the request in your wallet.",
-        "warning"
-      );
-      return null;
+    if (timedOut || err instanceof RabeSignatureTimeoutError) {
+      clearRabeSensitiveMemory(request);
     }
     throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
