@@ -276,3 +276,71 @@ export function warnOnMissingRabe(
   }
   return state;
 }
+
+// ---------------------------------------------------------------------------
+// Transaction signature time limit bounds (#134)
+// ---------------------------------------------------------------------------
+
+/** Default bound for Rabe signature requests (milliseconds). */
+export const DEFAULT_RABE_SIGNATURE_TIMEOUT_MS = 60_000;
+
+export interface RabeSignRequest {
+  xdr: string;
+  /** Sensitive buffer cleared on timeout / completion. */
+  payload?: Uint8Array | null;
+}
+
+export class RabeSignatureTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Rabe signature timed out after ${timeoutMs}ms`);
+    this.name = "RabeSignatureTimeoutError";
+  }
+}
+
+/**
+ * Zeroes and drops a sensitive buffer so it cannot be retained after the
+ * operation is aborted or completes.
+ */
+export function clearRabeSensitiveMemory(
+  request: RabeSignRequest
+): RabeSignRequest {
+  if (request.payload) {
+    request.payload.fill(0);
+  }
+  request.payload = null;
+  return request;
+}
+
+/**
+ * Races a Rabe signature operation against a timeout clock. On timeout the
+ * operation is aborted and any sensitive payload memory is cleared.
+ */
+export async function signRabeWithTimeout<T>(
+  request: RabeSignRequest,
+  signFn: (xdr: string) => Promise<T>,
+  timeoutMs: number = DEFAULT_RABE_SIGNATURE_TIMEOUT_MS
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      clearRabeSensitiveMemory(request);
+      reject(new RabeSignatureTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
+    clearRabeSensitiveMemory(request);
+    return result;
+  } catch (err) {
+    if (timedOut || err instanceof RabeSignatureTimeoutError) {
+      clearRabeSensitiveMemory(request);
+    }
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
