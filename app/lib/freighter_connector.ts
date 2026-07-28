@@ -227,6 +227,17 @@ function isValidFreighterActiveAddress(value: unknown): value is FreighterActive
   return true;
 }
 
+function sanitizeFreighterActiveAddress(
+  value: unknown
+): FreighterActiveAddress | null {
+  if (!isValidFreighterActiveAddress(value)) return null;
+  return {
+    address: value.address,
+    network: value.network,
+    connectedAt: value.connectedAt,
+  };
+}
+
 function isValidSerializedPayload(
   value: unknown
 ): value is FreighterActiveAddressSerializedV1 {
@@ -238,13 +249,13 @@ function isValidSerializedPayload(
   return true;
 }
 
-function getSessionStorageAdapter(): Storage | null {
+function getStorageAdapter(): Storage | null {
   if (typeof window === "undefined") return null;
   try {
     const testKey = "__freighter_connector_storage_test__";
-    window.sessionStorage.setItem(testKey, "1");
-    window.sessionStorage.removeItem(testKey);
-    return window.sessionStorage;
+    window.localStorage.setItem(testKey, "1");
+    window.localStorage.removeItem(testKey);
+    return window.localStorage;
   } catch {
     return null;
   }
@@ -256,7 +267,7 @@ export class FreighterActiveAddressStore {
 
   constructor(storageOverride?: Storage | null) {
     this.storage =
-      storageOverride !== undefined ? storageOverride : getSessionStorageAdapter();
+      storageOverride !== undefined ? storageOverride : getStorageAdapter();
     this.rehydrate();
   }
 
@@ -300,11 +311,7 @@ export class FreighterActiveAddressStore {
         this.storage.removeItem(FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY);
         return;
       }
-      this.activeAddress = {
-        address: parsed.address,
-        network: parsed.network,
-        connectedAt: parsed.connectedAt,
-      };
+      this.activeAddress = sanitizeFreighterActiveAddress(parsed);
     } catch (err) {
       console.warn(
         `${LOG_PREFIX} REHYDRATE FAILED`,
@@ -319,27 +326,17 @@ export class FreighterActiveAddressStore {
   }
 
   setActiveAddress(address: FreighterActiveAddress | null): void {
-    if (address) {
-      if (isValidFreighterActiveAddress(address)) {
-        this.activeAddress = {
-          address: address.address,
-          network: address.network,
-          connectedAt: address.connectedAt,
-        };
-      } else {
-        this.activeAddress = null;
-      }
-    } else {
-      this.activeAddress = null;
-    }
+    this.activeAddress = address ? sanitizeFreighterActiveAddress(address) : null;
     this.persist();
   }
 
   getActiveAddress(): FreighterActiveAddress | null {
-    this.activeAddress = null;
-    this.rehydrate();
-    const addr = this.activeAddress as FreighterActiveAddress | null;
-    return addr ? { address: addr.address, network: addr.network, connectedAt: addr.connectedAt } : null;
+    if (!this.activeAddress) return null;
+    return {
+      address: this.activeAddress.address,
+      network: this.activeAddress.network,
+      connectedAt: this.activeAddress.connectedAt,
+    };
   }
 
   clear(): void {
@@ -365,8 +362,8 @@ export const freighterActiveAddress = new FreighterActiveAddressStore();
  * Returns the verified address if valid, or null if verification failed or state mismatch.
  */
 export async function verifyAndRehydrateFreighterAddress(
-  getAddressFn: () => Promise<any> = getFreighterAddress,
-  isConnectedFn: () => Promise<any> = isFreighterConnected
+  getAddressFn: () => Promise<unknown> = getFreighterAddress,
+  isConnectedFn: () => Promise<unknown> = isFreighterConnected
 ): Promise<string | null> {
   const persisted = freighterActiveAddress.getActiveAddress();
   if (!persisted) {
@@ -379,7 +376,7 @@ export async function verifyAndRehydrateFreighterAddress(
       typeof conn === "boolean"
         ? conn
         : (conn && typeof conn === "object" && "isConnected" in conn)
-        ? (conn as any).isConnected
+        ? Boolean((conn as { isConnected?: unknown }).isConnected)
         : false;
 
     if (!isConnected) {
@@ -392,7 +389,7 @@ export async function verifyAndRehydrateFreighterAddress(
       typeof liveResult === "string"
         ? liveResult
         : (liveResult && typeof liveResult === "object" && "address" in liveResult)
-        ? (liveResult as any).address
+        ? String((liveResult as { address?: unknown }).address ?? "")
         : "";
 
     if (!liveAddress) {
