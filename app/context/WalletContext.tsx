@@ -14,8 +14,9 @@ import { NETWORK_PASSPHRASE } from "@/app/lib/contract";
 import { useToast } from "./ToastContext";
 import { ledgerActiveAddresses } from "@/app/lib/ledger_usb_bridge";
 import { freighterActiveAddress, verifyAndRehydrateFreighterAddress } from "@/app/lib/freighter_connector";
+import { walletStateStore } from "@/app/lib/wallet_state_store";
 
-const STORAGE_KEY = "milesto_wallet_connected";
+const LEGACY_STORAGE_KEY = "milesto_wallet_connected";
 
 export const SUPPORTED_WALLETS = [
   { id: "freighter", label: "Freighter" },
@@ -91,26 +92,57 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     initializedRef.current = true;
   }, []);
 
+  const initialRehydrationDone = useRef(false);
+
   useEffect(() => {
-    if (localStorage.getItem(STORAGE_KEY) !== "true") return;
+    if (initialRehydrationDone.current) return;
+    initialRehydrationDone.current = true;
+
+    const persisted = walletStateStore.getActiveState();
+    const hadLegacyFlag = localStorage.getItem(LEGACY_STORAGE_KEY) === "true";
+
+    if (!persisted && !hadLegacyFlag) return;
+
+    const walletId = persisted?.selectedWalletId ?? selectedWalletId;
+
+    if (persisted) {
+      setSelectedWalletId(persisted.selectedWalletId as SupportedWalletId);
+    }
 
     ensureKitInitialized();
 
     let active = true;
 
     const rehydrate = async () => {
-      if (selectedWalletId === "freighter") {
+      if (walletId === "freighter") {
         try {
           const verifiedAddress = await verifyAndRehydrateFreighterAddress();
           if (!active) return;
           if (verifiedAddress) {
             setAddress(verifiedAddress);
             await checkNetwork();
+
+            if (!persisted) {
+              walletStateStore.setActiveState({
+                address: verifiedAddress,
+                selectedWalletId: "freighter",
+                networkPassphrase: NETWORK_PASSPHRASE,
+                connectedAt: Date.now(),
+              });
+            }
+
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
             return;
           }
         } catch (e) {
           console.error("Failed to rehydrate freighter active address", e);
         }
+
+        if (!active) return;
+        walletStateStore.clear();
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        setAddress(null);
+        return;
       }
 
       StellarWalletsKit.getAddress()
@@ -119,26 +151,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           if (result.address) {
             setAddress(result.address);
             await checkNetwork();
-            if (selectedWalletId === "freighter") {
-              freighterActiveAddress.setActiveAddress({
+
+            if (!persisted) {
+              walletStateStore.setActiveState({
                 address: result.address,
-                network: NETWORK_PASSPHRASE,
+                selectedWalletId: walletId,
+                networkPassphrase: NETWORK_PASSPHRASE,
                 connectedAt: Date.now(),
               });
             }
+
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
           } else {
-            localStorage.removeItem(STORAGE_KEY);
-            if (selectedWalletId === "freighter") {
-              freighterActiveAddress.clear();
-            }
+            walletStateStore.clear();
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
+            setAddress(null);
           }
         })
         .catch(() => {
           if (!active) return;
-          localStorage.removeItem(STORAGE_KEY);
-          if (selectedWalletId === "freighter") {
-            freighterActiveAddress.clear();
-          }
+          walletStateStore.clear();
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+          setAddress(null);
         });
     };
 
@@ -159,7 +193,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (result.address) {
         setAddress(result.address);
         await checkNetwork();
-        localStorage.setItem(STORAGE_KEY, "true");
+        walletStateStore.setActiveState({
+          address: result.address,
+          selectedWalletId,
+          networkPassphrase: NETWORK_PASSPHRASE,
+          connectedAt: Date.now(),
+        });
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
         if (selectedWalletId === "freighter") {
           freighterActiveAddress.setActiveAddress({
             address: result.address,
@@ -180,7 +220,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     StellarWalletsKit.disconnect().catch((e) => {
       console.error("Wallet disconnect failed", e);
     });
-    localStorage.removeItem(STORAGE_KEY);
+    walletStateStore.clear();
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
     ledgerActiveAddresses.clear();
     freighterActiveAddress.clear();
     setNetworkMismatch(false);
