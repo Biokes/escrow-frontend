@@ -5,6 +5,7 @@
  */
 
 import type { ToastType } from "@/app/context/ToastContext";
+import { getAddress as getFreighterAddress, isConnected as isFreighterConnected } from "@stellar/freighter-api";
 
 const LOG_PREFIX = "[freighter_connector]";
 
@@ -195,5 +196,297 @@ export async function runFreighterSign<T>(
       return null;
     }
     throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Active address persistence
+// ---------------------------------------------------------------------------
+
+export const FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY = "freighter_connector_active_address";
+export const FREIGHTER_ACTIVE_ADDRESS_SCHEMA_VERSION = 1;
+
+/** Public shape of a persisted Freighter active address. Never includes secrets. */
+export interface FreighterActiveAddress {
+  address: string;
+  network: string;
+  connectedAt: number;
+}
+
+/** Internal versioned serialization schema. */
+interface FreighterActiveAddressSerializedV1 {
+  version: 1;
+  address: string;
+  network: string;
+  connectedAt: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isValidFreighterActiveAddress(
+  value: unknown
+): value is FreighterActiveAddress {
+  if (!isRecord(value)) return false;
+  if (typeof value.address !== "string" || value.address.length === 0) return false;
+  if (typeof value.network !== "string") return false;
+  if (
+    typeof value.connectedAt !== "number" ||
+    !Number.isFinite(value.connectedAt)
+  )
+    return false;
+  return true;
+}
+
+function isValidSerializedPayload(
+  value: unknown
+): value is FreighterActiveAddressSerializedV1 {
+  if (!isRecord(value)) return false;
+  if (value.version !== FREIGHTER_ACTIVE_ADDRESS_SCHEMA_VERSION) return false;
+  if (typeof value.address !== "string" || value.address.length === 0) return false;
+  if (typeof value.network !== "string") return false;
+  if (
+    typeof value.connectedAt !== "number" ||
+    !Number.isFinite(value.connectedAt)
+  )
+    return false;
+  return true;
+}
+
+function getSessionStorageAdapter(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const testKey = "__freighter_connector_storage_test__";
+    window.sessionStorage.setItem(testKey, "1");
+    window.sessionStorage.removeItem(testKey);
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persists the active Freighter address across page reloads using sessionStorage.
+ *
+ * Design notes:
+ * - The storage backend is injectable via the constructor for testability —
+ *   tests pass a mock Storage without touching private members.
+ * - Only public data (address, network, timestamp) is ever written; no secrets.
+ * - Deserialized data is validated against a versioned schema before use.
+ * - Any corruption or schema mismatch falls back to clean/null state.
+ */
+export class FreighterActiveAddressStore {
+  private activeAddress: FreighterActiveAddress | null = null;
+  private storage: Storage | null;
+
+  constructor(storageOverride?: Storage | null) {
+    this.storage =
+      storageOverride !== undefined ? storageOverride : getSessionStorageAdapter();
+    this.rehydrate();
+  }
+
+  private persist(): void {
+    if (!this.storage) return;
+    try {
+      if (this.activeAddress) {
+        const payload: FreighterActiveAddressSerializedV1 = {
+          version: FREIGHTER_ACTIVE_ADDRESS_SCHEMA_VERSION,
+          address: this.activeAddress.address,
+          network: this.activeAddress.network,
+          connectedAt: this.activeAddress.connectedAt,
+        };
+        this.storage.setItem(
+          FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY,
+          JSON.stringify(payload)
+        );
+      } else {
+        this.storage.removeItem(FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY);
+      }
+    } catch (err) {
+      console.warn(
+        `${LOG_PREFIX} PERSIST FAILED`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  private rehydrate(): void {
+    this.activeAddress = null;
+    if (!this.storage) return;
+    try {
+      const raw = this.storage.getItem(FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!isValidSerializedPayload(parsed)) {
+        console.warn(
+          `${LOG_PREFIX} REHYDRATE SCHEMA MISMATCH`,
+          "Persisted active address data failed validation, falling back to clean state."
+        );
+        this.storage.removeItem(FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY);
+        return;
+      }
+      this.activeAddress = {
+        address: parsed.address,
+        network: parsed.network,
+        connectedAt: parsed.connectedAt,
+      };
+    } catch (err) {
+      console.warn(
+        `${LOG_PREFIX} REHYDRATE FAILED`,
+        err instanceof Error ? err.message : String(err)
+      );
+      try {
+        this.storage.removeItem(FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY);
+      } catch {
+        // no-op — best effort cleanup
+      }
+    }
+  }
+
+  /**
+   * Persists a new active address. Validates the shape before writing — only
+   * the three public fields are stored, extra properties (e.g. private keys) are
+   * silently dropped.
+   */
+  setActiveAddress(address: FreighterActiveAddress | null): void {
+    if (address && isValidFreighterActiveAddress(address)) {
+      this.activeAddress = {
+        address: address.address,
+        network: address.network,
+        connectedAt: address.connectedAt,
+      };
+    } else {
+      this.activeAddress = null;
+    }
+    this.persist();
+  }
+
+  /**
+   * Returns a defensive copy of the currently persisted address, re-reading
+   * from storage on every call so callers always see live state even if another
+   * store instance wrote to the same storage backend.
+   */
+  getActiveAddress(): FreighterActiveAddress | null {
+    // rehydrate() always resets this.activeAddress before reading from storage.
+    this.rehydrate();
+    const addr = this.activeAddress;
+    return addr
+      ? { address: addr.address, network: addr.network, connectedAt: addr.connectedAt }
+      : null;
+  }
+
+  /** Clears the persisted address both in memory and in storage. */
+  clear(): void {
+    this.activeAddress = null;
+    if (this.storage) {
+      try {
+        this.storage.removeItem(FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY);
+      } catch (err) {
+        console.warn(
+          `${LOG_PREFIX} CLEAR STORAGE FAILED`,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+  }
+}
+
+/** Module-level singleton backed by sessionStorage. */
+export const freighterActiveAddress = new FreighterActiveAddressStore();
+
+// ---------------------------------------------------------------------------
+// Live revalidation against Freighter SDK
+// ---------------------------------------------------------------------------
+
+/** Shape returned by Freighter SDK v6+ isConnected(). */
+interface FreighterIsConnectedResult {
+  isConnected: boolean;
+}
+
+/** Shape returned by Freighter SDK v6+ getAddress(). */
+interface FreighterGetAddressResult {
+  address: string;
+}
+
+function isFreighterIsConnectedResult(
+  value: unknown
+): value is FreighterIsConnectedResult {
+  return (
+    isRecord(value) &&
+    typeof (value as Record<string, unknown>).isConnected === "boolean"
+  );
+}
+
+function isFreighterGetAddressResult(
+  value: unknown
+): value is FreighterGetAddressResult {
+  return (
+    isRecord(value) &&
+    typeof (value as Record<string, unknown>).address === "string"
+  );
+}
+
+/**
+ * Re-verifies a persisted active address against Freighter's live API state.
+ *
+ * Live state is always authoritative over persisted state:
+ * - If Freighter is disconnected, locked, or has switched accounts, the
+ *   persisted address is cleared and null is returned.
+ * - Only if the live address exactly matches the persisted address is the
+ *   address returned as verified.
+ *
+ * getAddressFn and isConnectedFn are injectable for testability.
+ */
+export async function verifyAndRehydrateFreighterAddress(
+  getAddressFn: () => Promise<unknown> = getFreighterAddress,
+  isConnectedFn: () => Promise<unknown> = isFreighterConnected
+): Promise<string | null> {
+  const persisted = freighterActiveAddress.getActiveAddress();
+  if (!persisted) {
+    return null;
+  }
+
+  try {
+    const conn = await isConnectedFn();
+    const isConnected =
+      typeof conn === "boolean"
+        ? conn
+        : isFreighterIsConnectedResult(conn)
+        ? conn.isConnected
+        : false;
+
+    if (!isConnected) {
+      freighterActiveAddress.clear();
+      return null;
+    }
+
+    const liveResult = await getAddressFn();
+    const liveAddress =
+      typeof liveResult === "string"
+        ? liveResult
+        : isFreighterGetAddressResult(liveResult)
+        ? liveResult.address
+        : "";
+
+    if (!liveAddress) {
+      freighterActiveAddress.clear();
+      return null;
+    }
+
+    if (liveAddress === persisted.address) {
+      return liveAddress;
+    }
+
+    // Live address differs from persisted — account switched, clear stale state.
+    freighterActiveAddress.clear();
+    return null;
+  } catch (err) {
+    console.warn(
+      `${LOG_PREFIX} verification check failed, clearing persisted state`,
+      err
+    );
+    freighterActiveAddress.clear();
+    return null;
   }
 }
