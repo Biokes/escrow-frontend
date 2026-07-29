@@ -15,18 +15,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            echo "Lockfile found. Running npm ci..."
-            npm ci
-          else
-            echo "Lockfile missing. Running npm install..."
-            npm install --no-audit --prefer-offline
-          fi
+        run: npm ci --ignore-scripts
 
       - name: Lint
         run: npm run lint
