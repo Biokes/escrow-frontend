@@ -14,6 +14,10 @@ import { NETWORK_PASSPHRASE } from "@/app/lib/contract";
 import { useToast } from "./ToastContext";
 import { ledgerActiveAddresses } from "@/app/lib/ledger_usb_bridge";
 import { freighterActiveAddress, verifyAndRehydrateFreighterAddress } from "@/app/lib/freighter_connector";
+import {
+  isWalletRejectedError,
+  WalletRejectedError,
+} from "@/app/lib/errors";
 
 const STORAGE_KEY = "milesto_wallet_connected";
 
@@ -193,13 +197,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     ensureKitInitialized();
     StellarWalletsKit.setWallet(selectedWalletId);
 
-    const result = (await StellarWalletsKit.signTransaction(xdr, {
-      address,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })) as KitSignResult;
+    try {
+      const result = (await StellarWalletsKit.signTransaction(xdr, {
+        address,
+        networkPassphrase: NETWORK_PASSPHRASE,
+      })) as KitSignResult;
 
-    return result.signedTxXdr ?? "";
-  }, [address, ensureKitInitialized, selectedWalletId]);
+      return result.signedTxXdr ?? "";
+    } catch (err) {
+      if (!isWalletRejectedError(err)) {
+        throw err;
+      }
+
+      console.warn(
+        "[wallet_state_context] signature rejected by user:",
+        err instanceof Error ? err.message : err
+      );
+      showToast(
+        "Signature cancelled - you rejected the request in your wallet.",
+        "warning"
+      );
+      throw new WalletRejectedError();
+    }
+  }, [address, ensureKitInitialized, selectedWalletId, showToast]);
 
   return (
     <WalletContext.Provider
