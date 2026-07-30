@@ -595,6 +595,72 @@ export class WalletTransactionTracker {
 }
 
 // =============================================================
+// Transaction signature time limit bounds (#114)
+// =============================================================
+
+/** Default bound for active wallet context signature requests. */
+export const DEFAULT_WALLET_SIGNATURE_TIMEOUT_MS = 60_000;
+
+export interface WalletSignRequest {
+  xdr: string;
+  /** Sensitive buffer cleared on timeout / completion. */
+  payload?: Uint8Array | null;
+}
+
+export class WalletSignatureTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Wallet signature timed out after ${timeoutMs}ms`);
+    this.name = "WalletSignatureTimeoutError";
+  }
+}
+
+/** Zeroes and drops a sensitive buffer so it cannot be retained after abort. */
+export function clearWalletSensitiveMemory(
+  request: WalletSignRequest
+): WalletSignRequest {
+  if (request.payload) {
+    request.payload.fill(0);
+  }
+  request.payload = null;
+  return request;
+}
+
+/**
+ * Races an active wallet context signature operation against a timeout
+ * clock. On timeout the operation is aborted and any sensitive payload
+ * memory is cleared.
+ */
+export async function signWalletWithTimeout<T>(
+  request: WalletSignRequest,
+  signFn: (xdr: string) => Promise<T>,
+  timeoutMs: number = DEFAULT_WALLET_SIGNATURE_TIMEOUT_MS
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      clearWalletSensitiveMemory(request);
+      reject(new WalletSignatureTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
+    clearWalletSensitiveMemory(request);
+    return result;
+  } catch (err) {
+    if (timedOut || err instanceof WalletSignatureTimeoutError) {
+      clearWalletSensitiveMemory(request);
+    }
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+// =============================================================
 // Loader overlay listener (#118)
 // =============================================================
 
