@@ -5,6 +5,7 @@ import { WalletProvider } from "./context/WalletContext";
 import { ToastProvider } from "./context/ToastContext";
 import Toast from "./components/Toast";
 import LedgerLoaderOverlay from "./components/LedgerLoaderOverlay";
+import GasEstimationWarningBanner from "./components/GasEstimationWarningBanner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,6 +35,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <ToastProvider>
           <WalletProvider>
+            <GasEstimationWarningBanner className="mx-4 mt-4" />
             {children}
             <Toast />
             <LedgerLoaderOverlay />

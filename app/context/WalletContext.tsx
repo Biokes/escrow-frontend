@@ -12,7 +12,12 @@ import { Networks, StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 import { defaultModules } from "@creit.tech/stellar-wallets-kit/modules/utils";
 import { NETWORK_PASSPHRASE } from "@/app/lib/contract";
 import { useToast } from "./ToastContext";
-import { ledgerActiveAddresses } from "@/app/lib/ledger_usb_bridge";
+import {
+  ledgerActiveAddresses,
+  checkSimulationFeeWarning,
+  type LedgerSimulationResult,
+  type LedgerGasWarningState,
+} from "@/app/lib/ledger_usb_bridge";
 import { freighterActiveAddress, verifyAndRehydrateFreighterAddress } from "@/app/lib/freighter_connector";
 
 const STORAGE_KEY = "milesto_wallet_connected";
@@ -39,6 +44,12 @@ interface WalletContextType {
   selectedWalletId: SupportedWalletId;
   setSelectedWalletId: (walletId: SupportedWalletId) => void;
   signTransaction: (xdr: string) => Promise<string>;
+  /** Current simulation result used to derive gas/fee warning state. */
+  simulationResult: LedgerSimulationResult | null;
+  /** Set after a Soroban simulation completes; triggers fee warning evaluation. */
+  setSimulationResult: (result: LedgerSimulationResult | null) => void;
+  /** Derived gas/fee warning state from the latest simulation result. */
+  gasWarning: LedgerGasWarningState | null;
 }
 
 const WalletContext = createContext<WalletContextType>({
@@ -50,6 +61,9 @@ const WalletContext = createContext<WalletContextType>({
   selectedWalletId: SUPPORTED_WALLETS[0].id,
   setSelectedWalletId: () => {},
   signTransaction: async () => "",
+  simulationResult: null,
+  setSimulationResult: () => {},
+  gasWarning: null,
 });
 
 export function WalletProvider({ children }: { children: ReactNode }) {
@@ -59,8 +73,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     SUPPORTED_WALLETS[0].id
   );
   const [networkMismatch, setNetworkMismatch] = useState(false);
+  const [simulationResult, setSimulationResult] =
+    useState<LedgerSimulationResult | null>(null);
   const initializedRef = useRef(false);
   const { showToast } = useToast();
+
+  const gasWarning: LedgerGasWarningState | null = simulationResult
+    ? checkSimulationFeeWarning(simulationResult)
+    : null;
 
   const checkNetwork = useCallback(async () => {
     try {
@@ -212,6 +232,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         selectedWalletId,
         setSelectedWalletId,
         signTransaction,
+        simulationResult,
+        setSimulationResult,
+        gasWarning,
       }}
     >
       {children}
