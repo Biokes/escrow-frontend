@@ -6,6 +6,19 @@
 
 import type { ToastType } from "@/app/context/ToastContext";
 import { getAddress as getFreighterAddress, isConnected as isFreighterConnected } from "@stellar/freighter-api";
+import {
+  applyMultiSigSignature,
+  createMultiSigSplit,
+  parseMultiSigEnvelope,
+  validateMultiSigAssembly,
+  withWalletLoader,
+  type WalletMultiSigAssemblyOptions,
+  type WalletMultiSigAssemblyResult,
+  type WalletMultiSigEnvelopeShape,
+  type WalletMultiSigParseOptions,
+  type WalletMultiSigSigner,
+  type WalletMultiSigSplit,
+} from "@/app/lib/wallet_state_context";
 
 const LOG_PREFIX = "[freighter_connector]";
 
@@ -58,35 +71,39 @@ export function clearFreighterSensitiveMemory(
 /**
  * Races a Freighter signature operation against a timeout clock. On timeout
  * the operation is aborted and any sensitive payload memory is cleared.
+ * Runs inside the shared wallet loader overlay (#108) so the spinner is
+ * visible for the full duration of the call.
  */
 export async function signFreighterWithTimeout<T>(
   request: FreighterSignRequest,
   signFn: (xdr: string) => Promise<T>,
   timeoutMs: number = DEFAULT_FREIGHTER_SIGNATURE_TIMEOUT_MS
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
+  return withWalletLoader(async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
 
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      clearFreighterSensitiveMemory(request);
-      reject(new FreighterSignatureTimeoutError(timeoutMs));
-    }, timeoutMs);
-  });
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        clearFreighterSensitiveMemory(request);
+        reject(new FreighterSignatureTimeoutError(timeoutMs));
+      }, timeoutMs);
+    });
 
-  try {
-    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
-    clearFreighterSensitiveMemory(request);
-    return result;
-  } catch (err) {
-    if (timedOut || err instanceof FreighterSignatureTimeoutError) {
+    try {
+      const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
       clearFreighterSensitiveMemory(request);
+      return result;
+    } catch (err) {
+      if (timedOut || err instanceof FreighterSignatureTimeoutError) {
+        clearFreighterSensitiveMemory(request);
+      }
+      throw err;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
-    throw err;
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  });
 }
 
 /**
@@ -178,25 +195,28 @@ export function isFreighterUserRejected(err: unknown): boolean {
 /**
  * Runs a Freighter signature step. Catches "user rejected transaction"
  * exceptions, logs them, and shows a warning toast instead of surfacing a
- * raw error to the caller.
+ * raw error to the caller. Runs inside the shared wallet loader overlay
+ * (#108) so the spinner is visible for the full duration of the call.
  */
 export async function runFreighterSign<T>(
   signFn: () => Promise<T>,
   showToast: FreighterToastHandler
 ): Promise<T | null> {
-  try {
-    return await signFn();
-  } catch (err) {
-    if (isFreighterUserRejected(err)) {
-      console.warn(
-        `${LOG_PREFIX} signature rejected by user:`,
-        err instanceof Error ? err.message : err
-      );
-      showToast("Signature cancelled — you rejected the request in your wallet.", "warning");
-      return null;
+  return withWalletLoader(async () => {
+    try {
+      return await signFn();
+    } catch (err) {
+      if (isFreighterUserRejected(err)) {
+        console.warn(
+          `${LOG_PREFIX} signature rejected by user:`,
+          err instanceof Error ? err.message : err
+        );
+        showToast("Signature cancelled — you rejected the request in your wallet.", "warning");
+        return null;
+      }
+      throw err;
     }
-    throw err;
-  }
+  });
 }
 
 export const FREIGHTER_ACTIVE_ADDRESS_STORAGE_KEY = "freighter_connector_active_address";
@@ -380,6 +400,8 @@ export const freighterActiveAddress = new FreighterActiveAddressStore();
  * Re-verifies a persisted active address against Freighter's actual live API state.
  * If Freighter is locked, switched account, or has no active address, updates/clears storage.
  * Returns the verified address if valid, or null if verification failed or state mismatch.
+ * Runs inside the shared wallet loader overlay (#108) so the spinner is
+ * visible for the full duration of the live API round-trip.
  */
 export async function verifyAndRehydrateFreighterAddress(
   getAddressFn: () => Promise<unknown> = getFreighterAddress,
@@ -390,44 +412,173 @@ export async function verifyAndRehydrateFreighterAddress(
     return null;
   }
 
-  try {
-    const conn = await isConnectedFn();
-    const isConnected =
-      typeof conn === "boolean"
-        ? conn
-        : (conn && typeof conn === "object" && "isConnected" in conn)
-        ? Boolean((conn as { isConnected?: unknown }).isConnected)
-        : false;
+  return withWalletLoader(async () => {
+    try {
+      const conn = await isConnectedFn();
+      const isConnected =
+        typeof conn === "boolean"
+          ? conn
+          : (conn && typeof conn === "object" && "isConnected" in conn)
+          ? Boolean((conn as { isConnected?: unknown }).isConnected)
+          : false;
 
-    if (!isConnected) {
+      if (!isConnected) {
+        freighterActiveAddress.clear();
+        return null;
+      }
+
+      const liveResult = await getAddressFn();
+      const liveAddress =
+        typeof liveResult === "string"
+          ? liveResult
+          : (liveResult && typeof liveResult === "object" && "address" in liveResult)
+          ? String((liveResult as { address?: unknown }).address ?? "")
+          : "";
+
+      if (!liveAddress) {
+        freighterActiveAddress.clear();
+        return null;
+      }
+
+      if (liveAddress === persisted.address) {
+        return liveAddress;
+      } else {
+        freighterActiveAddress.clear();
+        return null;
+      }
+    } catch (err) {
+      console.warn(`${LOG_PREFIX} verification check failed, clearing persisted state`, err);
       freighterActiveAddress.clear();
       return null;
     }
+  });
+}
 
-    const liveResult = await getAddressFn();
-    const liveAddress =
-      typeof liveResult === "string"
-        ? liveResult
-        : (liveResult && typeof liveResult === "object" && "address" in liveResult)
-        ? String((liveResult as { address?: unknown }).address ?? "")
-        : "";
+// ---------------------------------------------------------------------------
+// Multi-signature transaction helper hooks (#109)
+// ---------------------------------------------------------------------------
 
-    if (!liveAddress) {
-      freighterActiveAddress.clear();
-      return null;
-    }
+export type FreighterMultiSigSigner = WalletMultiSigSigner;
+export type FreighterMultiSigSplit = WalletMultiSigSplit;
 
-    if (liveAddress === persisted.address) {
-      return liveAddress;
-    } else {
-      freighterActiveAddress.clear();
-      return null;
-    }
-  } catch (err) {
-    console.warn(`${LOG_PREFIX} verification check failed, clearing persisted state`, err);
-    freighterActiveAddress.clear();
-    return null;
+/** Signs a raw XDR string through Freighter and returns the signed XDR. */
+export type FreighterMultiSigSignFn = (xdr: string) => Promise<string>;
+
+/**
+ * Parses a base multi-sig XDR envelope ahead of a Freighter-driven signing
+ * flow, confirming the transaction structure decodes and parses without
+ * errors before any per-signer split is created.
+ */
+export function parseFreighterMultiSigEnvelope(
+  baseXdr: string,
+  options?: WalletMultiSigParseOptions
+): WalletMultiSigEnvelopeShape {
+  return parseMultiSigEnvelope(baseXdr, options);
+}
+
+/**
+ * Builds a per-signer multi-sig split from a base XDR envelope, ready to be
+ * handed to Freighter for signing via {@link signFreighterMultiSigSplit}.
+ */
+export function createFreighterMultiSigSplit(
+  baseXdr: string,
+  signer: FreighterMultiSigSigner
+): FreighterMultiSigSplit {
+  return createMultiSigSplit(baseXdr, signer);
+}
+
+/**
+ * Signs a multi-sig split through Freighter, bounded by the signature
+ * timeout clock, and records the wallet-returned XDR onto the split.
+ */
+export async function signFreighterMultiSigSplit(
+  split: FreighterMultiSigSplit,
+  signFn: FreighterMultiSigSignFn,
+  timeoutMs: number = DEFAULT_FREIGHTER_SIGNATURE_TIMEOUT_MS
+): Promise<FreighterMultiSigSplit> {
+  const signedXdr = await signFreighterWithTimeout(
+    { xdr: split.baseXdr },
+    signFn,
+    timeoutMs
+  );
+  return applyMultiSigSignature(split, signedXdr);
+}
+
+/**
+ * Validates a collection of Freighter-signed multi-sig splits as a coherent
+ * assembly: every split's XDR is parsed, duplicate signers are rejected, and
+ * the unique signer count is checked against the required minimum.
+ */
+export function assembleFreighterMultiSigTransaction(
+  splits: FreighterMultiSigSplit[],
+  options?: WalletMultiSigAssemblyOptions
+): WalletMultiSigAssemblyResult {
+  return validateMultiSigAssembly(splits, options);
+}
+
+// ---------------------------------------------------------------------------
+// Network mismatch warnings (#106)
+// ---------------------------------------------------------------------------
+
+/** Chains the Freighter wallet can be pointed at. */
+export type FreighterNetwork = "mainnet" | "testnet";
+
+export interface FreighterNetworkMismatchState {
+  mismatched: boolean;
+  walletNetwork: FreighterNetwork;
+  appNetwork: FreighterNetwork;
+  warningMessage: string | null;
+}
+
+export class FreighterNetworkMismatchError extends Error {
+  constructor(
+    public readonly walletNetwork: FreighterNetwork,
+    public readonly appNetwork: FreighterNetwork
+  ) {
+    super(
+      `Network mismatch: Freighter wallet is on ${walletNetwork}, app expects ${appNetwork}`
+    );
+    this.name = "FreighterNetworkMismatchError";
   }
+}
+
+function capitalizeNetworkName(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/**
+ * Compares the network the Freighter wallet is pointed at against the
+ * network the app expects and produces a user-facing warning message when
+ * they diverge (e.g. Mainnet vs Testnet).
+ */
+export function checkFreighterNetworkMatch(
+  walletNetwork: FreighterNetwork,
+  appNetwork: FreighterNetwork
+): FreighterNetworkMismatchState {
+  const mismatched = walletNetwork !== appNetwork;
+  return {
+    mismatched,
+    walletNetwork,
+    appNetwork,
+    warningMessage: mismatched
+      ? `Network mismatch: your Freighter wallet is on ${capitalizeNetworkName(walletNetwork)} but this app uses ${capitalizeNetworkName(appNetwork)}. Switch networks in Freighter to continue.`
+      : null,
+  };
+}
+
+/**
+ * Runs a network match check and, on mismatch, logs a warning to the
+ * console via the shared freighter_connector debug conventions.
+ */
+export function warnOnFreighterNetworkMismatch(
+  walletNetwork: FreighterNetwork,
+  appNetwork: FreighterNetwork
+): FreighterNetworkMismatchState {
+  const state = checkFreighterNetworkMatch(walletNetwork, appNetwork);
+  if (state.mismatched && state.warningMessage) {
+    console.warn(`${LOG_PREFIX} ${state.warningMessage}`);
+  }
+  return state;
 }
 
 /**
