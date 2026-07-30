@@ -269,9 +269,6 @@ export default function MilestoneCard({
 
   const isPartiallyReleased = milestone.status === "PartiallyReleased";
   const displayAmount = formatBaseUnits(milestone.amount, { decimals: amountDecimals });
-  const displayReleasedAmount = milestone.releasedAmount
-    ? formatBaseUnits(milestone.releasedAmount, { decimals: amountDecimals })
-    : null;
   const releasePercent = isPartiallyReleased
     ? getReleasePercent(milestone.releasedAmount, milestone.amount)
     : null;

@@ -56,9 +56,10 @@ const WalletContext = createContext<WalletContextType>({
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [selectedWalletId, setSelectedWalletId] = useState<SupportedWalletId>(
-    SUPPORTED_WALLETS[0].id
-  );
+  const [selectedWalletId, setSelectedWalletId] = useState<SupportedWalletId>(() => {
+    const persisted = walletStateStore.getActiveState();
+    return persisted?.selectedWalletId as SupportedWalletId ?? SUPPORTED_WALLETS[0].id;
+  });
   const [networkMismatch, setNetworkMismatch] = useState(false);
   const initializedRef = useRef(false);
   const { showToast } = useToast();
@@ -104,10 +105,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (!persisted && !hadLegacyFlag) return;
 
     const walletId = persisted?.selectedWalletId ?? selectedWalletId;
-
-    if (persisted) {
-      setSelectedWalletId(persisted.selectedWalletId as SupportedWalletId);
-    }
 
     ensureKitInitialized();
 

@@ -8,7 +8,6 @@ export default function Navbar() {
   const {
     address,
     connect,
-    disconnect,
     isConnecting,
     networkMismatch,
     selectedWalletId,

@@ -120,7 +120,7 @@ describe("LedgerLoaderOverlay and Ledger Operation Loader Tracking", () => {
     const request = { xdr: "AAAA..." };
     // Create a promise that resolves after a small delay so we can capture the loading state
     const signFn = vi.fn().mockImplementation(
-      (xdr: string): Promise<LedgerSignResult> =>
+      (): Promise<LedgerSignResult> =>
         new Promise<LedgerSignResult>((resolve) =>
           setTimeout(() => resolve({ signedXdr: "signed-xdr" }), 150)
         )
