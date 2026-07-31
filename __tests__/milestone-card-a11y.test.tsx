@@ -12,7 +12,7 @@
  *  - Color-contrast token audit (computed against globals.css design tokens)
  */
 
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import MilestoneCard from "@/app/components/MilestoneCard";
 

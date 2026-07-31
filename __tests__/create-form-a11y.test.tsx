@@ -4,7 +4,7 @@
  * Validates proper ARIA attributes, keyboard navigability markers, and
  * semantic structure for screen-reader users.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CreateJob from "@/app/create/page";
 

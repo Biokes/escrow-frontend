@@ -17,7 +17,6 @@ import {
   WhitelistToken,
 } from "@/app/lib/whitelist";
 import { formatTxError } from "@/app/lib/errors";
-import { parseDecimalToBaseUnits } from "@/app/lib/amounts";
 
 type WizardSection = "details" | "milestones" | "review";
 
