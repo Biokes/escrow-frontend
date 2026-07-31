@@ -53,7 +53,7 @@ interface WalletContextType {
   connect: () => Promise<void>;
   disconnect: () => void;
   isConnecting: boolean;
-  networkMismatch: boolean;
+  networkMismatchMessage: string | null;
   selectedWalletId: SupportedWalletId;
   setSelectedWalletId: (walletId: SupportedWalletId) => void;
   signTransaction: (xdr: string) => Promise<string>;
@@ -71,7 +71,7 @@ const WalletContext = createContext<WalletContextType>({
   connect: async () => {},
   disconnect: () => {},
   isConnecting: false,
-  networkMismatch: false,
+  networkMismatchMessage: null,
   selectedWalletId: SUPPORTED_WALLETS[0].id,
   setSelectedWalletId: () => {},
   signTransaction: async () => "",
@@ -101,8 +101,25 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const checkNetwork = useCallback(async () => {
     try {
-      const result = await StellarWalletsKit.getNetwork();
-      setNetworkMismatch(result.networkPassphrase !== NETWORK_PASSPHRASE);
+      let walletPassphrase: string;
+
+      if (selectedWalletId === "freighter") {
+        const activeAddr = freighterActiveAddress.getActiveAddress();
+        walletPassphrase = activeAddr?.network ?? "";
+
+        if (!walletPassphrase) {
+          const result = await StellarWalletsKit.getNetwork();
+          walletPassphrase = result.networkPassphrase;
+        }
+      } else {
+        const result = await StellarWalletsKit.getNetwork();
+        walletPassphrase = result.networkPassphrase;
+      }
+
+      const mismatched = walletPassphrase !== NETWORK_PASSPHRASE;
+      setNetworkMismatchMessage(
+        mismatched ? buildMismatchMessage(selectedWalletId, walletPassphrase) : null
+      );
     } catch (e) {
       logWalletWarning("NETWORK CHECK FAILED", "Failed to check network", {
         err: e,
@@ -110,7 +127,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       });
       setNetworkMismatch(false);
     }
-  }, []);
+  }, [selectedWalletId]);
 
   const ensureKitInitialized = useCallback(() => {
     if (initializedRef.current) return;
@@ -233,7 +250,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(STORAGE_KEY);
     ledgerActiveAddresses.clear();
     freighterActiveAddress.clear();
-    setNetworkMismatch(false);
+    setNetworkMismatchMessage(null);
     setAddress(null);
   }, []);
 
@@ -288,7 +305,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         connect,
         disconnect,
         isConnecting,
-        networkMismatch,
+        networkMismatchMessage,
         selectedWalletId,
         setSelectedWalletId,
         signTransaction,
