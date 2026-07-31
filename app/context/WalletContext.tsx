@@ -28,8 +28,23 @@ import {
   type WalletMultiSigAssemblyResult,
   type WalletMultiSigSplit,
 } from "@/app/lib/wallet_state_context";
+import { walletStateStore } from "@/app/lib/wallet_state_store";
+import { WalletRejectedError, isWalletRejectedError } from "@/app/lib/errors";
 
-const STORAGE_KEY = "milesto_wallet_connected";
+const LEGACY_STORAGE_KEY = "milesto_wallet_connected";
+const STORAGE_KEY = LEGACY_STORAGE_KEY;
+
+const APP_NETWORK_DISPLAY = "Testnet";
+
+function buildMismatchMessage(walletId: string, walletNetwork: string): string {
+  const walletDisplay =
+    walletId === "freighter" ? "Freighter" :
+    walletId === "albedo"   ? "Albedo"   :
+    walletId === "xbull"    ? "xBull"    :
+    walletId === "hana"     ? "Hana"     : "your wallet";
+
+  return `Network mismatch: your ${walletDisplay} is on ${walletNetwork} but this app expects Stellar ${APP_NETWORK_DISPLAY}. Please switch networks.`;
+}
 
 export const SUPPORTED_WALLETS = [
   { id: "freighter", label: "Freighter" },
@@ -53,7 +68,7 @@ interface WalletContextType {
   connect: () => Promise<void>;
   disconnect: () => void;
   isConnecting: boolean;
-  networkMismatch: boolean;
+  networkMismatchMessage: string | null;
   selectedWalletId: SupportedWalletId;
   setSelectedWalletId: (walletId: SupportedWalletId) => void;
   signTransaction: (xdr: string) => Promise<string>;
@@ -71,7 +86,7 @@ const WalletContext = createContext<WalletContextType>({
   connect: async () => {},
   disconnect: () => {},
   isConnecting: false,
-  networkMismatch: false,
+  networkMismatchMessage: null,
   selectedWalletId: SUPPORTED_WALLETS[0].id,
   setSelectedWalletId: () => {},
   signTransaction: async () => "",
@@ -86,10 +101,13 @@ const walletTracker = new WalletTransactionTracker();
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [selectedWalletId, setSelectedWalletId] = useState<SupportedWalletId>(
-    SUPPORTED_WALLETS[0].id
-  );
-  const [networkMismatch, setNetworkMismatch] = useState(false);
+  const [selectedWalletId, setSelectedWalletId] = useState<SupportedWalletId>(() => {
+    const persisted = walletStateStore.getActiveState();
+    return persisted?.selectedWalletId as SupportedWalletId ?? SUPPORTED_WALLETS[0].id;
+  });
+  const [networkMismatchMessage, setNetworkMismatchMessage] = useState<
+    string | null
+  >(null);
   const [simulationResult, setSimulationResult] =
     useState<LedgerSimulationResult | null>(null);
   const initializedRef = useRef(false);
@@ -101,16 +119,33 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const checkNetwork = useCallback(async () => {
     try {
-      const result = await StellarWalletsKit.getNetwork();
-      setNetworkMismatch(result.networkPassphrase !== NETWORK_PASSPHRASE);
+      let walletPassphrase: string;
+
+      if (selectedWalletId === "freighter") {
+        const activeAddr = freighterActiveAddress.getActiveAddress();
+        walletPassphrase = activeAddr?.network ?? "";
+
+        if (!walletPassphrase) {
+          const result = await StellarWalletsKit.getNetwork();
+          walletPassphrase = result.networkPassphrase;
+        }
+      } else {
+        const result = await StellarWalletsKit.getNetwork();
+        walletPassphrase = result.networkPassphrase;
+      }
+
+      const mismatched = walletPassphrase !== NETWORK_PASSPHRASE;
+      setNetworkMismatchMessage(
+        mismatched ? buildMismatchMessage(selectedWalletId, walletPassphrase) : null
+      );
     } catch (e) {
       logWalletWarning("NETWORK CHECK FAILED", "Failed to check network", {
         err: e,
         phase: "error",
       });
-      setNetworkMismatch(false);
+      setNetworkMismatchMessage(null);
     }
-  }, []);
+  }, [selectedWalletId]);
 
   const ensureKitInitialized = useCallback(() => {
     if (initializedRef.current) return;
@@ -131,21 +166,42 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     initializedRef.current = true;
   }, []);
 
+  const initialRehydrationDone = useRef(false);
+
   useEffect(() => {
-    if (localStorage.getItem(STORAGE_KEY) !== "true") return;
+    if (initialRehydrationDone.current) return;
+    initialRehydrationDone.current = true;
+
+    const persisted = walletStateStore.getActiveState();
+    const hadLegacyFlag = localStorage.getItem(LEGACY_STORAGE_KEY) === "true";
+
+    if (!persisted && !hadLegacyFlag) return;
+
+    const walletId = persisted?.selectedWalletId ?? selectedWalletId;
 
     ensureKitInitialized();
 
     let active = true;
 
     const rehydrate = async () => {
-      if (selectedWalletId === "freighter") {
+      if (walletId === "freighter") {
         try {
           const verifiedAddress = await verifyAndRehydrateFreighterAddress();
           if (!active) return;
           if (verifiedAddress) {
             setAddress(verifiedAddress);
             await checkNetwork();
+
+            if (!persisted) {
+              walletStateStore.setActiveState({
+                address: verifiedAddress,
+                selectedWalletId: "freighter",
+                networkPassphrase: NETWORK_PASSPHRASE,
+                connectedAt: Date.now(),
+              });
+            }
+
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
             return;
           }
         } catch (e) {
@@ -155,6 +211,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             { err: e, phase: "error" }
           );
         }
+
+        if (!active) return;
+        walletStateStore.clear();
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        setAddress(null);
+        return;
       }
 
       StellarWalletsKit.getAddress()
@@ -163,26 +225,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           if (result.address) {
             setAddress(result.address);
             await checkNetwork();
-            if (selectedWalletId === "freighter") {
-              freighterActiveAddress.setActiveAddress({
+
+            if (!persisted) {
+              walletStateStore.setActiveState({
                 address: result.address,
-                network: NETWORK_PASSPHRASE,
+                selectedWalletId: walletId,
+                networkPassphrase: NETWORK_PASSPHRASE,
                 connectedAt: Date.now(),
               });
             }
+
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
           } else {
-            localStorage.removeItem(STORAGE_KEY);
-            if (selectedWalletId === "freighter") {
-              freighterActiveAddress.clear();
-            }
+            walletStateStore.clear();
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
+            setAddress(null);
           }
         })
         .catch(() => {
           if (!active) return;
-          localStorage.removeItem(STORAGE_KEY);
-          if (selectedWalletId === "freighter") {
-            freighterActiveAddress.clear();
-          }
+          walletStateStore.clear();
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+          setAddress(null);
         });
     };
 
@@ -230,10 +294,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         walletTracker.track("disconnect", "error", "Wallet disconnect failed", e);
       }
     });
-    localStorage.removeItem(STORAGE_KEY);
+    walletStateStore.clear();
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
     ledgerActiveAddresses.clear();
     freighterActiveAddress.clear();
-    setNetworkMismatch(false);
+    setNetworkMismatchMessage(null);
     setAddress(null);
   }, []);
 
@@ -253,10 +318,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         return result.signedTxXdr ?? "";
       } catch (e) {
         walletTracker.track("sign", "error", "Wallet signTransaction failed", e);
+
+        // A user declining in their wallet is an expected outcome, not a
+        // fault: surface it as a warning and normalise it to
+        // WalletRejectedError so callers can branch on it. Every other
+        // failure is rethrown untouched.
+        if (isWalletRejectedError(e)) {
+          console.warn(
+            "[wallet_state_context] signature rejected by user:",
+            e instanceof Error ? e.message : String(e)
+          );
+          showToast(
+            "Signature cancelled - you rejected the request in your wallet.",
+            "warning"
+          );
+          throw new WalletRejectedError();
+        }
+
         throw e;
       }
     });
-  }, [address, ensureKitInitialized, selectedWalletId]);
+  }, [address, ensureKitInitialized, selectedWalletId, showToast]);
 
   const assembleMultiSigTransaction = useCallback(
     async (
@@ -288,7 +370,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         connect,
         disconnect,
         isConnecting,
-        networkMismatch,
+        networkMismatchMessage,
         selectedWalletId,
         setSelectedWalletId,
         signTransaction,

@@ -4,7 +4,7 @@
  * Verifies that animation utility classes are applied to interactive
  * elements so transitions/keyframes fire on user interaction.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CreateJob from "@/app/create/page";
 
