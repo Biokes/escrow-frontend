@@ -5,23 +5,33 @@ export class WalletRejectedError extends Error {
   }
 }
 
-export function formatTxError(err: unknown): string {
+export function isWalletRejectedError(err: unknown): boolean {
   if (err instanceof WalletRejectedError) {
-    return err.message;
+    return true;
+  }
+
+  if (!(err instanceof Error)) {
+    return false;
+  }
+
+  const message = err.message.toLowerCase();
+  return (
+    message.includes("user declined") ||
+    message.includes("user rejected") ||
+    message.includes("request rejected") ||
+    message.includes("denied by the user") ||
+    message.includes("cancelled") ||
+    message.includes("canceled")
+  );
+}
+
+export function formatTxError(err: unknown): string {
+  if (isWalletRejectedError(err)) {
+    return "You declined the transaction in your wallet.";
   }
 
   if (err instanceof Error) {
     const message = err.message.toLowerCase();
-
-    if (
-      message.includes("user declined") ||
-      message.includes("user rejected") ||
-      message.includes("request rejected") ||
-      message.includes("cancelled") ||
-      message.includes("canceled")
-    ) {
-      return "You declined the transaction in your wallet.";
-    }
 
     if (message.includes("freighter not found") || message.includes("wallet")) {
       return "Wallet not available. Install Freighter and connect your wallet.";

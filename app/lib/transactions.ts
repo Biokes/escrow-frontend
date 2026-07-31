@@ -73,12 +73,7 @@ export async function submitContractTransaction({
 
   onPhase?.("signing");
 
-  let signedXdr: string;
-  try {
-    signedXdr = await signTransaction(xdr);
-  } catch {
-    throw new WalletRejectedError();
-  }
+  const signedXdr = await signTransaction(xdr);
 
   if (!signedXdr) {
     throw new WalletRejectedError();
