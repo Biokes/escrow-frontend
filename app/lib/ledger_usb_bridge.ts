@@ -791,3 +791,39 @@ export class LedgerActiveAddressStore {
 }
 
 export const ledgerActiveAddresses = new LedgerActiveAddressStore();
+
+
+export interface MultiSigTxPayload {
+  signatures: Array<{ publicKey: string; signature?: string }>;
+  threshold: number;
+  rawTransaction: string;
+}
+
+export function parseMultiSigTxPayload(payload: unknown): MultiSigTxPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload: must be an object");
+  }
+  const tx = payload as Partial<MultiSigTxPayload>;
+  if (!Array.isArray(tx.signatures)) {
+    throw new Error("Invalid payload: missing signatures array");
+  }
+  if (typeof tx.threshold !== "number" || tx.threshold <= 0) {
+    throw new Error("Invalid payload: threshold must be a positive number");
+  }
+  if (typeof tx.rawTransaction !== "string" || tx.rawTransaction.trim() === "") {
+    throw new Error("Invalid payload: rawTransaction must be a non-empty string");
+  }
+  return {
+    signatures: tx.signatures,
+    threshold: tx.threshold,
+    rawTransaction: tx.rawTransaction,
+  };
+}
+
+export function assembleMultiSigTransaction(tx: MultiSigTxPayload): { isReady: boolean; validSignaturesCount: number } {
+  const validSignaturesCount = tx.signatures.filter((s) => Boolean(s.signature)).length;
+  return {
+    isReady: validSignaturesCount >= tx.threshold,
+    validSignaturesCount,
+  };
+}
