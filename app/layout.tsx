@@ -6,6 +6,7 @@ import { ToastProvider } from "./context/ToastContext";
 import Toast from "./components/Toast";
 import LedgerLoaderOverlay from "./components/LedgerLoaderOverlay";
 import WalletLoaderOverlay from "./components/WalletLoaderOverlay";
+import GasEstimationWarningBanner from "./components/GasEstimationWarningBanner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

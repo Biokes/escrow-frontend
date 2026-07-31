@@ -317,7 +317,7 @@ describe("WalletStateStore", () => {
       const result = store.getActiveState();
       expect(result).not.toBeNull();
       expect(result!.address).toBe(withExtra.address);
-      const bag = result as Record<string, unknown>;
+      const bag = result as unknown as Record<string, unknown>;
       expect("privateKey" in bag).toBe(false);
       expect("seed" in bag).toBe(false);
     });

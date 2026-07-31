@@ -1,6 +1,7 @@
+import { describe, expect, it } from "vitest";
 import {
   parseMultiSigTxPayload,
-  assembleMultiSigTransaction,
+  evaluateMultiSigAssembly,
   MultiSigTxPayload,
 } from "../ledger_usb_bridge";
 
@@ -33,7 +34,7 @@ describe("ledger_usb_bridge - MultiSig Transaction Helpers", () => {
   });
 
   it("should evaluate multi-sig assembly readiness correctly", () => {
-    const incompleteAssembly = assembleMultiSigTransaction(validPayload);
+    const incompleteAssembly = evaluateMultiSigAssembly(validPayload);
     expect(incompleteAssembly.isReady).toBe(false);
     expect(incompleteAssembly.validSignaturesCount).toBe(1);
 
@@ -44,7 +45,7 @@ describe("ledger_usb_bridge - MultiSig Transaction Helpers", () => {
         { publicKey: "pubkey_2", signature: "sig_2" },
       ],
     };
-    const readyAssembly = assembleMultiSigTransaction(completePayload);
+    const readyAssembly = evaluateMultiSigAssembly(completePayload);
     expect(readyAssembly.isReady).toBe(true);
     expect(readyAssembly.validSignaturesCount).toBe(2);
   });

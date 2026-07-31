@@ -19,14 +19,17 @@ import {
 
 describe("albedo_connector console warning blocks", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     albedoTracker.clear();
   });
 
   afterEach(() => {
     warnSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it("formats stack traces from Error instances", () => {
@@ -102,12 +105,9 @@ describe("albedo_connector console warning blocks", () => {
 
     tracker.track("tx-10", "building", "Preparing XDR");
     tracker.track("tx-10", "simulating", "Running fee simulation");
-    tracker.track(
-      "tx-10",
-      "error",
-      "Albedo popup closed",
-      new Error("popup closed")
-    );
+    tracker.track("tx-10", "error", "Albedo popup closed", {
+      err: new Error("popup closed"),
+    });
 
     const history = tracker.getHistory("tx-10");
     expect(history).toHaveLength(3);
@@ -117,9 +117,12 @@ describe("albedo_connector console warning blocks", () => {
       "error",
     ]);
     expect(history[2].stack).toContain("Error: popup closed");
-    expect(warnSpy).toHaveBeenCalledTimes(3);
+    // Non-error phases go to console.warn; the error phase is routed to
+    // console.error so it surfaces at the right level in devtools.
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    const lastCall = String(warnSpy.mock.calls[2][0]);
+    const lastCall = String(errorSpy.mock.calls[0][0]);
     expect(lastCall).toContain("[albedo_connector]");
     expect(lastCall).toContain("TX ERROR");
     expect(lastCall).toContain("--- stack trace ---");

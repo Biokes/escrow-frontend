@@ -925,10 +925,32 @@ export function parseMultiSigTxPayload(payload: unknown): MultiSigTxPayload {
   };
 }
 
-export function assembleMultiSigTransaction(tx: MultiSigTxPayload): { isReady: boolean; validSignaturesCount: number } {
+/**
+ * Reports whether a multi-sig payload has gathered enough signatures to meet
+ * its threshold. Distinct from `assembleMultiSigTransaction` above, which
+ * merges co-signer envelopes into a single signed XDR.
+ */
+export function evaluateMultiSigAssembly(tx: MultiSigTxPayload): { isReady: boolean; validSignaturesCount: number } {
   const validSignaturesCount = tx.signatures.filter((s) => Boolean(s.signature)).length;
   return {
     isReady: validSignaturesCount >= tx.threshold,
     validSignaturesCount,
   };
+}
+
+/**
+ * Runs a network match check and, on mismatch, emits a formatted console
+ * warning block (with stack) for Ledger transaction debug tracking.
+ */
+export function warnOnLedgerNetworkMismatch(
+  walletNetwork: LedgerNetwork,
+  appNetwork: LedgerNetwork
+): NetworkMismatchState {
+  const state = checkNetworkMatch(walletNetwork, appNetwork);
+  if (state.mismatched && state.warningMessage) {
+    logLedgerWarning("NETWORK MISMATCH", state.warningMessage, {
+      err: new LedgerNetworkMismatchError(walletNetwork, appNetwork),
+    });
+  }
+  return state;
 }

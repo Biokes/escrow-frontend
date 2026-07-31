@@ -28,8 +28,23 @@ import {
   type WalletMultiSigAssemblyResult,
   type WalletMultiSigSplit,
 } from "@/app/lib/wallet_state_context";
+import { walletStateStore } from "@/app/lib/wallet_state_store";
+import { WalletRejectedError, isWalletRejectedError } from "@/app/lib/errors";
 
 const LEGACY_STORAGE_KEY = "milesto_wallet_connected";
+const STORAGE_KEY = LEGACY_STORAGE_KEY;
+
+const APP_NETWORK_DISPLAY = "Testnet";
+
+function buildMismatchMessage(walletId: string, walletNetwork: string): string {
+  const walletDisplay =
+    walletId === "freighter" ? "Freighter" :
+    walletId === "albedo"   ? "Albedo"   :
+    walletId === "xbull"    ? "xBull"    :
+    walletId === "hana"     ? "Hana"     : "your wallet";
+
+  return `Network mismatch: your ${walletDisplay} is on ${walletNetwork} but this app expects Stellar ${APP_NETWORK_DISPLAY}. Please switch networks.`;
+}
 
 export const SUPPORTED_WALLETS = [
   { id: "freighter", label: "Freighter" },
@@ -90,7 +105,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const persisted = walletStateStore.getActiveState();
     return persisted?.selectedWalletId as SupportedWalletId ?? SUPPORTED_WALLETS[0].id;
   });
-  const [networkMismatch, setNetworkMismatch] = useState(false);
+  const [networkMismatchMessage, setNetworkMismatchMessage] = useState<
+    string | null
+  >(null);
   const [simulationResult, setSimulationResult] =
     useState<LedgerSimulationResult | null>(null);
   const initializedRef = useRef(false);
@@ -126,7 +143,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         err: e,
         phase: "error",
       });
-      setNetworkMismatch(false);
+      setNetworkMismatchMessage(null);
     }
   }, [selectedWalletId]);
 
@@ -301,10 +318,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         return result.signedTxXdr ?? "";
       } catch (e) {
         walletTracker.track("sign", "error", "Wallet signTransaction failed", e);
+
+        // A user declining in their wallet is an expected outcome, not a
+        // fault: surface it as a warning and normalise it to
+        // WalletRejectedError so callers can branch on it. Every other
+        // failure is rethrown untouched.
+        if (isWalletRejectedError(e)) {
+          console.warn(
+            "[wallet_state_context] signature rejected by user:",
+            e instanceof Error ? e.message : String(e)
+          );
+          showToast(
+            "Signature cancelled - you rejected the request in your wallet.",
+            "warning"
+          );
+          throw new WalletRejectedError();
+        }
+
         throw e;
       }
     });
-  }, [address, ensureKitInitialized, selectedWalletId]);
+  }, [address, ensureKitInitialized, selectedWalletId, showToast]);
 
   const assembleMultiSigTransaction = useCallback(
     async (
