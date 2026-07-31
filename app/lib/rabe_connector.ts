@@ -344,3 +344,60 @@ export async function signRabeWithTimeout<T>(
     if (timer !== undefined) clearTimeout(timer);
   }
 }
+
+// ---------------------------------------------------------------------------
+// User signature rejection handling (#135)
+// ---------------------------------------------------------------------------
+
+export class RabeUserRejectedError extends Error {
+  constructor(message = "user rejected transaction") {
+    super(message);
+    this.name = "RabeUserRejectedError";
+  }
+}
+
+/**
+ * Returns true when the thrown value represents a deliberate user refusal to
+ * sign — either a first-class RabeUserRejectedError or an Error whose message
+ * matches common wallet rejection phrases.
+ */
+export function isRabeUserRejected(err: unknown): boolean {
+  if (err instanceof RabeUserRejectedError) return true;
+  if (!(err instanceof Error)) return false;
+  const message = err.message.toLowerCase();
+  return (
+    message.includes("user rejected") ||
+    message.includes("user declined") ||
+    message.includes("request rejected") ||
+    message.includes("denied by the user")
+  );
+}
+
+/**
+ * Runs a Rabe signature step. Catches "user rejected transaction" exceptions,
+ * logs them via the structured rabe_connector warning machinery, and shows a
+ * warning toast instead of surfacing a raw error to the caller.
+ *
+ * Non-rejection errors are re-thrown unchanged so callers can handle them.
+ */
+export async function runRabeSign<T>(
+  signFn: () => Promise<T>,
+  showToast: RabeToastHandler
+): Promise<T | null> {
+  try {
+    return await signFn();
+  } catch (err) {
+    if (isRabeUserRejected(err)) {
+      logRabeWarning("SIGNATURE REJECTED", "signature rejected by user", {
+        err,
+        phase: "signing",
+      });
+      showToast(
+        "Signature cancelled — you rejected the request in your wallet.",
+        "warning"
+      );
+      return null;
+    }
+    throw err;
+  }
+}
