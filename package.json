@@ -9,7 +9,10 @@
     "next": {
       "postcss": "^8.5.10"
     },
-    "protobufjs": "^7.6.3"
+    "protobufjs": "^7.6.3",
+    "@creit.tech/stellar-wallets-kit": {
+      "@stellar/stellar-sdk": "^13.3.0"
+    }
   },
   "scripts": {
     "dev": "next dev",
