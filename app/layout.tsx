@@ -5,7 +5,7 @@ import { WalletProvider } from "./context/WalletContext";
 import { ToastProvider } from "./context/ToastContext";
 import Toast from "./components/Toast";
 import LedgerLoaderOverlay from "./components/LedgerLoaderOverlay";
-import GasEstimationWarningBanner from "./components/GasEstimationWarningBanner";
+import WalletLoaderOverlay from "./components/WalletLoaderOverlay";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -39,6 +39,7 @@ export default function RootLayout({
             {children}
             <Toast />
             <LedgerLoaderOverlay />
+            <WalletLoaderOverlay />
           </WalletProvider>
         </ToastProvider>
       </body>
