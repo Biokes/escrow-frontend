@@ -35,6 +35,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <ToastProvider>
           <WalletProvider>
+            <GasEstimationWarningBanner className="mx-4 mt-4" />
             {children}
             <Toast />
             <LedgerLoaderOverlay />
