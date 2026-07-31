@@ -263,6 +263,67 @@ export function warnOnMissingWallet(
   return state;
 }
 
+const NETWORK_SYNC_ACTIVE_ADDRESS_KEY = "network_sync_active_address_state";
+
+export interface NetworkSyncSessionState {
+  activeAddress: string | null;
+  lastSyncedAt: number;
+}
+
+/**
+ * Saves the active sync session state to session storage so it survives page reloads.
+ */
+export function saveNetworkSyncSession(state: NetworkSyncSessionState): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(NETWORK_SYNC_ACTIVE_ADDRESS_KEY, JSON.stringify(state));
+  } catch (err) {
+    console.warn(
+      `${LOG_PREFIX} failed to save session state:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+/**
+ * Loads and parses the active sync session state from session storage.
+ */
+export function loadNetworkSyncSession(): NetworkSyncSessionState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(NETWORK_SYNC_ACTIVE_ADDRESS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return {
+        activeAddress: typeof parsed.activeAddress === "string" ? parsed.activeAddress : null,
+        lastSyncedAt: typeof parsed.lastSyncedAt === "number" ? parsed.lastSyncedAt : Date.now(),
+      };
+    }
+  } catch (err) {
+    console.warn(
+      `${LOG_PREFIX} failed to parse session state:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+  return null;
+}
+
+/**
+ * Clears the active sync session state from session storage.
+ */
+export function clearNetworkSyncSession(): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(NETWORK_SYNC_ACTIVE_ADDRESS_KEY);
+  } catch (err) {
+    console.warn(
+      `${LOG_PREFIX} failed to clear session state:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 // =============================================================
 // Multi-signature transaction assembly helpers (#159)
 // -------------------------------------------------------------

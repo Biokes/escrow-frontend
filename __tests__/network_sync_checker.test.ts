@@ -5,6 +5,9 @@ import {
   NetworkSyncUserRejectedError,
   runNetworkSyncSign,
   validateNetworkSyncWithSignature,
+  saveNetworkSyncSession,
+  loadNetworkSyncSession,
+  clearNetworkSyncSession,
 } from "@/app/lib/network_sync_checker";
 
 describe("network_sync_checker user rejection handling", () => {
@@ -159,5 +162,44 @@ describe("validateNetworkSyncWithSignature", () => {
       "warning"
     );
     expect(warnSpy).toHaveBeenCalled();
+  });
+});
+
+describe("network_sync_checker state serialization", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    sessionStorage.clear();
+  });
+
+  it("saves and loads active session state correctly on reload", () => {
+    const state = { activeAddress: "GABC123", lastSyncedAt: 1234567890 };
+    saveNetworkSyncSession(state);
+    
+    const loaded = loadNetworkSyncSession();
+    expect(loaded).toEqual(state);
+  });
+
+  it("returns null if session storage is empty", () => {
+    expect(loadNetworkSyncSession()).toBeNull();
+  });
+
+  it("handles malformed session storage gracefully", () => {
+    sessionStorage.setItem("network_sync_active_address_state", "not valid json");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    
+    expect(loadNetworkSyncSession()).toBeNull();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("clears the session state correctly", () => {
+    const state = { activeAddress: "GABC123", lastSyncedAt: 1234567890 };
+    saveNetworkSyncSession(state);
+    clearNetworkSyncSession();
+    
+    expect(loadNetworkSyncSession()).toBeNull();
   });
 });
