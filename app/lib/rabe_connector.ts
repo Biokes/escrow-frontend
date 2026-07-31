@@ -1,7 +1,9 @@
 /**
- * Rabe wallet helper interface — formats console warnings and tracks
- * transaction lifecycle for debug visibility.
+ * Rabe wallet helper interface — formats console warnings, tracks transaction
+ * lifecycle for debug visibility, and checks wallet extension availability.
  */
+
+import type { ToastType } from "@/app/context/ToastContext";
 
 export type RabeTxPhase =
   | "idle"
@@ -190,3 +192,155 @@ export class RabeTransactionTracker {
 }
 
 export const rabeTracker = new RabeTransactionTracker();
+
+export const RABE_INSTALL_URL = "https://rabe.app/";
+
+/** Fallback copy shown when the Rabe extension is missing. */
+export const RABE_SETUP_INSTRUCTION =
+  "Rabe wallet extension not detected. Install Rabe and refresh this page to continue.";
+
+export type RabeAvailabilityStatus = "available" | "unavailable" | "error";
+
+export interface RabeAvailabilityState {
+  available: boolean;
+  status: RabeAvailabilityStatus;
+  /** User-facing setup instructions when the extension is missing. */
+  setupInstruction: string | null;
+  warningMessage: string | null;
+}
+
+export type RabeToastHandler = (message: string, type: ToastType) => void;
+
+/**
+ * Detects whether the Rabe browser extension is present. Accepts an optional
+ * detector override for tests / non-browser runtimes.
+ */
+export function detectRabeExtension(detector?: () => boolean): boolean {
+  if (detector) {
+    return detector();
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const w = window as unknown as Record<string, unknown>;
+  return !!(w["rabeApi"] || w["rabe"]);
+}
+
+/**
+ * Checks Rabe extension availability and returns fallback setup instructions
+ * when the extension is missing or the check itself throws.
+ */
+export function checkRabeAvailability(
+  detector?: () => boolean
+): RabeAvailabilityState {
+  try {
+    const available = detectRabeExtension(detector);
+    if (available) {
+      return {
+        available: true,
+        status: "available",
+        setupInstruction: null,
+        warningMessage: null,
+      };
+    }
+    return {
+      available: false,
+      status: "unavailable",
+      setupInstruction: RABE_SETUP_INSTRUCTION,
+      warningMessage: RABE_SETUP_INSTRUCTION,
+    };
+  } catch (err) {
+    logRabeWarning("WALLET UNAVAILABLE", "wallet availability check failed", {
+      err,
+    });
+    return {
+      available: false,
+      status: "error",
+      setupInstruction: RABE_SETUP_INSTRUCTION,
+      warningMessage: `Unable to verify wallet availability. ${RABE_SETUP_INSTRUCTION}`,
+    };
+  }
+}
+
+/**
+ * Runs a Rabe availability check and surfaces a warning toast when the
+ * extension is missing or the check errors.
+ */
+export function warnOnMissingRabe(
+  showToast: RabeToastHandler,
+  detector?: () => boolean
+): RabeAvailabilityState {
+  const state = checkRabeAvailability(detector);
+  if (!state.available && state.warningMessage) {
+    showToast(state.warningMessage, "warning");
+  }
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// Transaction signature time limit bounds (#134)
+// ---------------------------------------------------------------------------
+
+/** Default bound for Rabe signature requests (milliseconds). */
+export const DEFAULT_RABE_SIGNATURE_TIMEOUT_MS = 60_000;
+
+export interface RabeSignRequest {
+  xdr: string;
+  /** Sensitive buffer cleared on timeout / completion. */
+  payload?: Uint8Array | null;
+}
+
+export class RabeSignatureTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Rabe signature timed out after ${timeoutMs}ms`);
+    this.name = "RabeSignatureTimeoutError";
+  }
+}
+
+/**
+ * Zeroes and drops a sensitive buffer so it cannot be retained after the
+ * operation is aborted or completes.
+ */
+export function clearRabeSensitiveMemory(
+  request: RabeSignRequest
+): RabeSignRequest {
+  if (request.payload) {
+    request.payload.fill(0);
+  }
+  request.payload = null;
+  return request;
+}
+
+/**
+ * Races a Rabe signature operation against a timeout clock. On timeout the
+ * operation is aborted and any sensitive payload memory is cleared.
+ */
+export async function signRabeWithTimeout<T>(
+  request: RabeSignRequest,
+  signFn: (xdr: string) => Promise<T>,
+  timeoutMs: number = DEFAULT_RABE_SIGNATURE_TIMEOUT_MS
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      clearRabeSensitiveMemory(request);
+      reject(new RabeSignatureTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([signFn(request.xdr), timeoutPromise]);
+    clearRabeSensitiveMemory(request);
+    return result;
+  } catch (err) {
+    if (timedOut || err instanceof RabeSignatureTimeoutError) {
+      clearRabeSensitiveMemory(request);
+    }
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
