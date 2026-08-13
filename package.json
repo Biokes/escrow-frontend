@@ -11,7 +11,10 @@
     },
     "protobufjs": "^7.6.3",
     "axios": "^1.18.1",
-    "nanoid": "^3.3.17"
+    "nanoid": "^3.3.17",
+    "@hot-wallet/sdk": "npm:empty-npm-package@1.0.0",
+    "@trezor/connect-web": "npm:empty-npm-package@1.0.0",
+    "@trezor/connect-plugin-stellar": "npm:empty-npm-package@1.0.0"
   },
   "scripts": {
     "dev": "next dev",
