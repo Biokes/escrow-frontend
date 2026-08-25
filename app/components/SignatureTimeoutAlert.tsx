@@ -39,34 +39,44 @@ export default function SignatureTimeoutAlert({
   onDismiss,
   className = "",
 }: SignatureTimeoutAlertProps) {
-  const { networkMismatchMessage, selectedWalletId, assembleMultiSigTransaction } =
-    useWallet();
+  const {
+    networkMismatchMessage,
+    selectedWalletId,
+    assembleMultiSigTransaction,
+    signatureTimeoutError,
+    signatureTimeoutXdr,
+    clearSignatureTimeout,
+  } = useWallet();
   const albedoAssembly = useAlbedoMultiSigAssembly(NETWORK_PASSPHRASE);
   const ledgerAssembly = useLedgerMultiSigAssembly(NETWORK_PASSPHRASE);
   const [isRetrying, setIsRetrying] = useState(false);
   const [parseMessage, setParseMessage] = useState<string | null>(null);
 
+  const activeError = error ?? signatureTimeoutError;
+  const activeTransactionXdr = transactionXdr ?? signatureTimeoutXdr ?? undefined;
   const hasTimeout =
-    isOpen || (error instanceof Error && error.name === "WalletSignatureTimeoutError");
+    isOpen ||
+    (activeError instanceof Error &&
+      activeError.name === "WalletSignatureTimeoutError");
 
   useEffect(() => {
     if (!hasTimeout && !networkMismatchMessage) return;
 
     logWalletWarning("SIGNATURE TIMEOUT ALERT", "Wallet signature requires attention", {
-      err: error,
+      err: activeError,
       txId: transactionId,
       phase: "error",
     });
-  }, [error, hasTimeout, networkMismatchMessage, transactionId]);
+  }, [activeError, hasTimeout, networkMismatchMessage, transactionId]);
 
   useEffect(() => {
-    if (!transactionXdr) {
+    if (!activeTransactionXdr) {
       setParseMessage(null);
       return;
     }
 
     try {
-      parseMultiSigEnvelope(transactionXdr, {
+      parseMultiSigEnvelope(activeTransactionXdr, {
         parseEnvelopeXdr: createStellarEnvelopeParser(NETWORK_PASSPHRASE),
       });
       setParseMessage(null);
@@ -75,7 +85,7 @@ export default function SignatureTimeoutAlert({
         parseError instanceof Error ? parseError.message : String(parseError)
       );
     }
-  }, [transactionXdr]);
+  }, [activeTransactionXdr]);
 
   if (!hasTimeout && !networkMismatchMessage) return null;
 
@@ -96,15 +106,15 @@ export default function SignatureTimeoutAlert({
   }
 
   async function assemble() {
-    if (!transactionXdr || signers.length === 0) return;
+    if (!activeTransactionXdr || signers.length === 0) return;
     try {
       const assembly =
         selectedWalletId === "albedo" ? albedoAssembly : ledgerAssembly;
-      assembly.parseStructure(transactionXdr);
+      assembly.parseStructure(activeTransactionXdr);
       const splits = signers.map((signer) => ({
-        baseXdr: transactionXdr,
+        baseXdr: activeTransactionXdr,
         signer,
-        signedXdr: transactionXdr,
+        signedXdr: activeTransactionXdr,
       }));
       await assembleMultiSigTransaction(splits);
     } catch (assemblyError) {
@@ -144,13 +154,20 @@ export default function SignatureTimeoutAlert({
                 {isRetrying ? <ButtonSpinner className="h-4 w-4" /> : "Retry signature"}
               </button>
             )}
-            {transactionXdr && signers.length > 0 && (
+            {activeTransactionXdr && signers.length > 0 && (
               <button type="button" onClick={assemble} data-testid="signature-timeout-assemble">
                 Validate multisig
               </button>
             )}
             {onDismiss && (
-              <button type="button" onClick={onDismiss} data-testid="signature-timeout-dismiss">
+              <button
+                type="button"
+                onClick={() => {
+                  clearSignatureTimeout();
+                  onDismiss?.();
+                }}
+                data-testid="signature-timeout-dismiss"
+              >
                 Dismiss
               </button>
             )}
