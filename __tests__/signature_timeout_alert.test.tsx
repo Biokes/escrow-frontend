@@ -16,10 +16,12 @@ describe("SignatureTimeoutAlert", () => {
     warnSpy.mockRestore();
   });
 
-  it("reports malformed transaction structures", () => {
+  it("reports malformed transaction structures", async () => {
     render(<SignatureTimeoutAlert isOpen transactionXdr="not-valid-xdr" />);
 
-    expect(screen.getByTestId("signature-timeout-transaction-error")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("signature-timeout-transaction-error")).toBeInTheDocument();
+    });
   });
 
   it("shows the retry spinner and clears loader state when retry completes", async () => {

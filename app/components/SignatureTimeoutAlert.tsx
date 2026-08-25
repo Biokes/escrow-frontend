@@ -93,7 +93,9 @@ export default function SignatureTimeoutAlert({
     if (!onRetry || isRetrying) return;
     setIsRetrying(true);
     try {
-      await withWalletLoader(onRetry);
+      await withWalletLoader(async () => {
+        await onRetry();
+      });
     } catch (retryError) {
       logWalletWarning("SIGNATURE RETRY FAILED", "Wallet signature retry failed", {
         err: retryError,
