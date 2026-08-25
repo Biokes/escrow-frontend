@@ -4,6 +4,8 @@ import { useIsAdmin } from "@/app/hooks/useIsAdmin";
 import { SUPPORTED_WALLETS } from "@/app/context/WalletContext";
 import Link from "next/link";
 
+import WalletBadge from "@/app/components/WalletBadge";
+
 export default function Navbar() {
   const {
     address,
@@ -16,10 +18,10 @@ export default function Navbar() {
   } = useWallet();
   const { isAdminUser } = useIsAdmin(address);
 
-  const short = (addr: string) => `${addr.slice(0, 4)}...${addr.slice(-4)}`;
-
   const focusRing =
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-950 rounded";
+
+  const selectedWallet = SUPPORTED_WALLETS.find((w) => w.id === selectedWalletId);
 
   return (
     <>
@@ -65,12 +67,12 @@ export default function Navbar() {
                   Admin
                 </Link>
               )}
-              <span
-                className="text-sm text-gray-300 font-mono bg-gray-800 px-3 py-1 rounded-full"
-                aria-label={`Connected wallet ${address}`}
-              >
-                {short(address)}
-              </span>
+              <WalletBadge
+                address={address}
+                isConnecting={isConnecting}
+                providerName={selectedWallet?.label}
+                networkMismatch={networkMismatchMessage}
+              />
               <button
                 onClick={disconnect}
                 className={`bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition ${focusRing}`}
