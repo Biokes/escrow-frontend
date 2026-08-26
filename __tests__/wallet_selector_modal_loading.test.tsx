@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import WalletSelectorModal from "@/app/components/WalletSelectorModal";
 
 import {
@@ -9,6 +9,35 @@ import {
   withModalWalletLoader,
   subscribeToModalWalletLoading,
 } from "@/app/lib/wallet_selector_modal";
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+vi.mock("@/app/context/ToastContext", () => ({
+  useToast: () => ({
+    showToast: vi.fn(),
+  }),
+}));
+
+vi.mock("@/app/lib/freighter_connector", () => ({
+  checkFreighterAvailability: vi.fn(() => ({
+    available: true,
+    setupInstruction: "",
+  })),
+  FREIGHTER_INSTALL_URL: "https://freighter.app",
+  FREIGHTER_SETUP_INSTRUCTION: "Install Freighter",
+  isFreighterUserRejected: vi.fn(() => false),
+}));
+
+vi.mock("@/app/context/WalletContext", () => ({
+  SUPPORTED_WALLETS: [
+    { id: "freighter", label: "Freighter" },
+    { id: "albedo", label: "Albedo" },
+    { id: "xbull", label: "xBull" },
+    { id: "hana", label: "Hana" },
+  ],
+}));
 
 // ---------------------------------------------------------------------------
 // Loading state helpers — unit tests
@@ -206,7 +235,7 @@ describe("WalletSelectorModal loading spinner (#task-3)", () => {
         isLoading={true}
       />,
     );
-    expect(screen.getByTestId("wallet-option-freighter")).toBeDisabled();
-    expect(screen.getByTestId("wallet-option-albedo")).toBeDisabled();
+    expect(screen.getByTestId("wallet-selector-option-freighter")).toBeDisabled();
+    expect(screen.getByTestId("wallet-selector-option-albedo")).toBeDisabled();
   });
 });

@@ -1,6 +1,19 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  checkFreighterAvailability,
+  FREIGHTER_INSTALL_URL,
+  isFreighterUserRejected,
+} from "@/app/lib/freighter_connector";
+import {
+  isWalletRejectedError,
+} from "@/app/lib/errors";
+import { useToast } from "@/app/context/ToastContext";
+import {
+  SUPPORTED_WALLETS,
+  type SupportedWalletId,
+} from "@/app/context/WalletContext";
 import {
   checkNetworkMismatch,
   buildWalletSelectorMismatchMessage,
@@ -10,29 +23,33 @@ import {
   type WalletCachedKey,
 } from "@/app/lib/wallet_selector_modal";
 
-export const WALLET_SELECTOR_SUPPORTED_WALLETS = [
-  { id: "freighter", label: "Freighter" },
-  { id: "albedo", label: "Albedo" },
-  { id: "xbull", label: "xBull" },
-  { id: "hana", label: "Hana" },
-] as const;
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-export type WalletSelectorWalletId =
-  (typeof WALLET_SELECTOR_SUPPORTED_WALLETS)[number]["id"];
+export type WalletSelectorModalStatus =
+  | "idle"
+  | "connecting"
+  | "signing"
+  | "rejected"
+  | "error"
+  | "unavailable";
+
+export type WalletSelectorWalletId = SupportedWalletId;
 
 export interface WalletSelectorModalProps {
   /** Whether the modal is currently visible. */
   isOpen: boolean;
   /** Called when the user requests the modal be closed. */
   onClose: () => void;
-  /** Callback when the user selects a wallet to connect. */
-  onConnect: (walletId: WalletSelectorWalletId) => void;
-  /** Callback when the user disconnects the active wallet. */
-  onDisconnect: () => void;
+  /** Called when a wallet is successfully connected. */
+  onConnect?: (walletId: SupportedWalletId) => void;
+  /** Called when the user disconnects the active wallet. */
+  onDisconnect?: () => void;
   /** The currently connected wallet address (null when disconnected). */
   activeAddress?: string | null;
   /** The currently selected wallet provider ID. */
-  selectedWalletId?: WalletSelectorWalletId;
+  selectedWalletId?: SupportedWalletId;
   /** The wallet's current network passphrase (for mismatch detection). */
   walletNetwork?: string | null;
   /** The expected app network passphrase. */
@@ -41,16 +58,71 @@ export interface WalletSelectorModalProps {
   isLoading?: boolean;
   /** Current wallet provider error message (null when no error). */
   errorMessage?: string | null;
+  /** Optional detector override for Freighter availability (useful in tests). */
+  freighterDetector?: () => boolean;
+  /** Optional detector override for window globals (useful in tests). */
+  windowDetector?: () => boolean;
+  className?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Detects if any supported browser wallet extension is installed.
+ * Accepts optional detector overrides for test environments.
+ */
+export function detectAnyWalletExtension(
+  detector?: () => boolean
+): boolean {
+  if (detector) {
+    return detector();
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const w = window as unknown as Record<string, unknown>;
+  return !!(w["freighterApi"] || w["freighter"]);
 }
 
 /**
- * Wallet selector modal component.
- *
- * Renders a dropdown-style modal listing all supported wallets, with
- * network mismatch warnings when the wallet network does not match the
- * application, a loading spinner during wallet operations, and persistent
- * caching of the last-used wallet key via `walletSelectorStore`.
+ * Catches and normalises wallet interaction errors. Returns a structured
+ * result so the caller can decide how to surface the error to the user.
  */
+export function handleWalletError(err: unknown): {
+  isRejection: boolean;
+  message: string;
+  error: unknown;
+} {
+  if (isFreighterUserRejected(err) || isWalletRejectedError(err)) {
+    const originalMessage =
+      err instanceof Error ? err.message : "user rejected transaction";
+    console.warn(
+      "[wallet_selector_modal] signature rejected by user:",
+      originalMessage
+    );
+    return {
+      isRejection: true,
+      message:
+        "Signature cancelled — you rejected the request in your wallet.",
+      error: err,
+    };
+  }
+
+  const message =
+    err instanceof Error ? err.message : "An unexpected error occurred.";
+  return {
+    isRejection: false,
+    message,
+    error: err,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export default function WalletSelectorModal({
   isOpen,
   onClose,
@@ -62,17 +134,23 @@ export default function WalletSelectorModal({
   appNetwork = "Test SDF Network ; September 2015",
   isLoading = false,
   errorMessage = null,
+  freighterDetector,
+  className = "",
 }: WalletSelectorModalProps) {
+  const { showToast } = useToast();
+  const [status, setStatus] = useState<WalletSelectorModalStatus>("idle");
   const [modalLoading, setModalLoading] = useState(false);
 
+  // Subscribe to loading-state changes from the loader wrapper
   useEffect(() => {
     return subscribeToModalWalletLoading((loading) => {
       setModalLoading(loading);
     });
   }, []);
 
-  const effectiveLoading = isLoading || modalLoading;
+  const effectiveLoading = isLoading || modalLoading || status === "connecting" || status === "signing";
 
+  // Network mismatch detection
   const networkMismatch = checkNetworkMismatch(
     walletNetwork ?? "",
     appNetwork,
@@ -83,6 +161,14 @@ export default function WalletSelectorModal({
     walletNetwork ?? "",
     appNetwork,
   );
+
+  // Wallet availability — computed synchronously during render when the
+  // modal opens.  `checkFreighterAvailability` is a pure sync call, so
+  // there is no need for an effect (and it avoids the
+  // react-hooks/set-state-in-effect lint rule).
+  const availability = isOpen
+    ? checkFreighterAvailability(freighterDetector)
+    : null;
 
   // Persistent caching: persist the cached key when the wallet connects
   useEffect(() => {
@@ -98,17 +184,35 @@ export default function WalletSelectorModal({
   }, [activeAddress, selectedWalletId, walletNetwork]);
 
   const handleConnect = useCallback(
-    (walletId: WalletSelectorWalletId) => {
+    async (walletId: SupportedWalletId) => {
       void withModalWalletLoader(async () => {
-        onConnect(walletId);
+        setStatus("connecting");
+
+        try {
+          onConnect?.(walletId);
+          setStatus("idle");
+        } catch (err) {
+          const result = handleWalletError(err);
+
+          if (result.isRejection) {
+            setStatus("rejected");
+            showToast(result.message, "warning");
+          } else {
+            setStatus("error");
+            showToast(
+              "Failed to connect wallet. Please try again.",
+              "error"
+            );
+          }
+        }
       });
     },
-    [onConnect],
+    [onConnect, showToast]
   );
 
   const handleDisconnect = useCallback(() => {
     void withModalWalletLoader(async () => {
-      onDisconnect();
+      onDisconnect?.();
     });
     onClose();
   }, [onDisconnect, onClose]);
@@ -117,23 +221,25 @@ export default function WalletSelectorModal({
 
   return (
     <div
-      data-testid="wallet-selector-modal-overlay"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      data-testid="wallet-selector-modal"
       role="dialog"
-      aria-modal="true"
-      aria-label="Wallet selector"
+      aria-label="Select Wallet"
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 ${className}`}
     >
       <div
-        data-testid="wallet-selector-modal"
-        className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl w-full max-w-md mx-4"
+        data-testid="wallet-selector-modal-content"
+        className="bg-surface rounded-xl shadow-xl max-w-md w-full mx-4 p-6"
       >
-        {/* Modal header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
-          <h2 className="text-lg font-semibold text-white">Select Wallet</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-primary">
+            Select Wallet
+          </h2>
           <button
+            type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded"
-            aria-label="Close wallet selector"
+            data-testid="wallet-selector-modal-close"
+            aria-label="Close"
+            className="text-secondary hover:text-primary transition-colors"
           >
             ✕
           </button>
@@ -143,21 +249,65 @@ export default function WalletSelectorModal({
         {networkMismatch.mismatched && mismatchMessage && (
           <div
             data-testid="wallet-selector-network-warning"
-            className="bg-warning/40 border-b border-warning px-6 py-3 text-warning-soft text-sm text-center"
+            className="bg-warning/40 border border-warning rounded-lg px-4 py-3 mb-4 text-warning-soft text-sm"
             role="alert"
           >
             {mismatchMessage}
           </div>
         )}
 
-        {/* Error message */}
+        {/* Wallet availability warning */}
+        {availability && !availability.available && (
+          <div
+            data-testid="wallet-selector-availability-warning"
+            role="alert"
+            className="bg-warning/40 border border-warning rounded-lg px-4 py-3 mb-4 text-warning-soft text-sm"
+          >
+            <p data-testid="wallet-selector-setup-instruction">
+              {availability.setupInstruction}
+            </p>
+            <a
+              href={FREIGHTER_INSTALL_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="wallet-selector-install-link"
+              className="underline font-medium hover:opacity-80"
+            >
+              Install Freighter
+            </a>
+          </div>
+        )}
+
+        {/* Error message from props */}
         {errorMessage && (
           <div
             data-testid="wallet-selector-error-message"
-            className="bg-danger/20 border-b border-danger px-6 py-3 text-danger-soft text-sm text-center"
+            className="bg-danger/20 border border-danger rounded-lg px-4 py-3 mb-4 text-danger-soft text-sm text-center"
             role="alert"
           >
             {errorMessage}
+          </div>
+        )}
+
+        {/* Rejection warning */}
+        {status === "rejected" && (
+          <div
+            data-testid="wallet-selector-rejection-warning"
+            role="alert"
+            className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-4 py-3 mb-4 text-sm text-yellow-300"
+          >
+            Signature cancelled — you rejected the request in your wallet.
+          </div>
+        )}
+
+        {/* Error warning */}
+        {status === "error" && (
+          <div
+            data-testid="wallet-selector-error-warning"
+            role="alert"
+            className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 mb-4 text-sm text-red-300"
+          >
+            Failed to connect wallet. Please try again.
           </div>
         )}
 
@@ -200,7 +350,7 @@ export default function WalletSelectorModal({
         {activeAddress && (
           <div
             data-testid="wallet-selector-active-info"
-            className="px-6 py-3 border-b border-gray-700"
+            className="mb-4 p-3 border border-white/10 rounded-lg"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -222,43 +372,43 @@ export default function WalletSelectorModal({
         )}
 
         {/* Wallet list */}
-        <div className="px-4 py-3">
-          <ul className="space-y-2" role="listbox" aria-label="Available wallets">
-            {WALLET_SELECTOR_SUPPORTED_WALLETS.map((wallet) => {
-              const isSelected = wallet.id === selectedWalletId;
-              const isConnected =
-                activeAddress && wallet.id === selectedWalletId;
+        <div className="space-y-2" data-testid="wallet-selector-list">
+          {SUPPORTED_WALLETS.map((wallet) => {
+            const isSelected = wallet.id === selectedWalletId;
+            const isConnected =
+              activeAddress !== null && wallet.id === selectedWalletId;
 
-              return (
-                <li key={wallet.id}>
-                  <button
-                    onClick={() => handleConnect(wallet.id)}
-                    disabled={effectiveLoading}
-                    data-testid={`wallet-option-${wallet.id}`}
-                    data-selected={isSelected}
-                    data-connected={isConnected}
-                    role="option"
-                    aria-selected={isSelected}
-                    className={`w-full text-left px-4 py-3 rounded-lg transition-colors flex items-center gap-3 ${
-                      isSelected
-                        ? "bg-indigo-600/20 border border-indigo-500 text-white"
-                        : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-750 hover:border-gray-600"
-                    } disabled:opacity-50`}
-                  >
-                    <span className="text-sm font-medium">{wallet.label}</span>
-                    {isConnected && (
-                      <span
-                        data-testid="wallet-option-connected-badge"
-                        className="ml-auto text-xs text-green-400"
-                      >
-                        Connected
-                      </span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+            return (
+              <button
+                key={wallet.id}
+                type="button"
+                data-testid={`wallet-selector-option-${wallet.id}`}
+                onClick={() => handleConnect(wallet.id)}
+                disabled={effectiveLoading}
+                data-selected={isSelected}
+                data-connected={isConnected}
+                className={`w-full text-left px-4 py-3 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  isSelected
+                    ? "border-indigo-500 bg-indigo-600/20 text-white"
+                    : "border-white/10 hover:border-white/20 hover:bg-white/5 text-primary"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">
+                    {wallet.label}
+                  </span>
+                  {isConnected && (
+                    <span
+                      data-testid="wallet-selector-connected-badge"
+                      className="text-xs text-green-400"
+                    >
+                      Connected
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

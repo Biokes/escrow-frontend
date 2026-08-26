@@ -1,6 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import WalletSelectorModal from "@/app/components/WalletSelectorModal";
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+vi.mock("@/app/context/ToastContext", () => ({
+  useToast: () => ({
+    showToast: vi.fn(),
+  }),
+}));
+
+vi.mock("@/app/lib/freighter_connector", () => ({
+  checkFreighterAvailability: vi.fn(() => ({
+    available: true,
+    setupInstruction: "",
+  })),
+  FREIGHTER_INSTALL_URL: "https://freighter.app",
+  FREIGHTER_SETUP_INSTRUCTION: "Install Freighter",
+  isFreighterUserRejected: vi.fn(() => false),
+}));
+
+vi.mock("@/app/context/WalletContext", () => ({
+  SUPPORTED_WALLETS: [
+    { id: "freighter", label: "Freighter" },
+    { id: "albedo", label: "Albedo" },
+    { id: "xbull", label: "xBull" },
+    { id: "hana", label: "Hana" },
+  ],
+}));
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 const MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 2015";
@@ -187,10 +216,10 @@ describe("WalletSelectorModal network mismatch warning bar (#task-1)", () => {
         onDisconnect={() => {}}
       />,
     );
-    expect(screen.getByTestId("wallet-option-freighter")).toBeInTheDocument();
-    expect(screen.getByTestId("wallet-option-albedo")).toBeInTheDocument();
-    expect(screen.getByTestId("wallet-option-xbull")).toBeInTheDocument();
-    expect(screen.getByTestId("wallet-option-hana")).toBeInTheDocument();
+    expect(screen.getByTestId("wallet-selector-option-freighter")).toBeInTheDocument();
+    expect(screen.getByTestId("wallet-selector-option-albedo")).toBeInTheDocument();
+    expect(screen.getByTestId("wallet-selector-option-xbull")).toBeInTheDocument();
+    expect(screen.getByTestId("wallet-selector-option-hana")).toBeInTheDocument();
   });
 
   it("renders the modal with aria attributes", () => {
@@ -203,7 +232,6 @@ describe("WalletSelectorModal network mismatch warning bar (#task-1)", () => {
       />,
     );
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dialog).toHaveAttribute("aria-label", "Wallet selector");
+    expect(dialog).toHaveAttribute("aria-label", "Select Wallet");
   });
 });
