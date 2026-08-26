@@ -117,7 +117,7 @@ describe("WalletSelectorModal wallet availability (#103)", () => {
 
     expect(screen.getByTestId("wallet-selector-modal")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText("Connect Wallet")).toBeInTheDocument();
+    expect(screen.getByText("Select Wallet")).toBeInTheDocument();
   });
 
   it("renders all supported wallet options", () => {

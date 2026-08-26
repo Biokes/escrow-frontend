@@ -4,19 +4,24 @@ import { useCallback, useEffect, useState } from "react";
 import {
   checkFreighterAvailability,
   FREIGHTER_INSTALL_URL,
-  FREIGHTER_SETUP_INSTRUCTION,
   isFreighterUserRejected,
-  type FreighterAvailabilityState,
 } from "@/app/lib/freighter_connector";
 import {
   isWalletRejectedError,
-  WalletRejectedError,
 } from "@/app/lib/errors";
 import { useToast } from "@/app/context/ToastContext";
 import {
   SUPPORTED_WALLETS,
   type SupportedWalletId,
 } from "@/app/context/WalletContext";
+import {
+  checkNetworkMismatch,
+  buildWalletSelectorMismatchMessage,
+  subscribeToModalWalletLoading,
+  withModalWalletLoader,
+  walletSelectorStore,
+  type WalletCachedKey,
+} from "@/app/lib/wallet_selector_modal";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,13 +35,29 @@ export type WalletSelectorModalStatus =
   | "error"
   | "unavailable";
 
+export type WalletSelectorWalletId = SupportedWalletId;
+
 export interface WalletSelectorModalProps {
   /** Whether the modal is currently visible. */
   isOpen: boolean;
-  /** Called when the user clicks the close / dismiss control. */
+  /** Called when the user requests the modal be closed. */
   onClose: () => void;
   /** Called when a wallet is successfully connected. */
   onConnect?: (walletId: SupportedWalletId) => void;
+  /** Called when the user disconnects the active wallet. */
+  onDisconnect?: () => void;
+  /** The currently connected wallet address (null when disconnected). */
+  activeAddress?: string | null;
+  /** The currently selected wallet provider ID. */
+  selectedWalletId?: SupportedWalletId;
+  /** The wallet's current network passphrase (for mismatch detection). */
+  walletNetwork?: string | null;
+  /** The expected app network passphrase. */
+  appNetwork?: string;
+  /** Whether a connect/disconnect operation is currently in progress. */
+  isLoading?: boolean;
+  /** Current wallet provider error message (null when no error). */
+  errorMessage?: string | null;
   /** Optional detector override for Freighter availability (useful in tests). */
   freighterDetector?: () => boolean;
   /** Optional detector override for window globals (useful in tests). */
@@ -106,84 +127,95 @@ export default function WalletSelectorModal({
   isOpen,
   onClose,
   onConnect,
+  onDisconnect,
+  activeAddress = null,
+  selectedWalletId = "freighter",
+  walletNetwork = null,
+  appNetwork = "Test SDF Network ; September 2015",
+  isLoading = false,
+  errorMessage = null,
   freighterDetector,
   className = "",
 }: WalletSelectorModalProps) {
   const { showToast } = useToast();
   const [status, setStatus] = useState<WalletSelectorModalStatus>("idle");
-  const [availability, setAvailability] =
-    useState<FreighterAvailabilityState | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
 
-  // Check wallet availability when modal opens
+  // Subscribe to loading-state changes from the loader wrapper
   useEffect(() => {
-    if (!isOpen) return;
+    return subscribeToModalWalletLoading((loading) => {
+      setModalLoading(loading);
+    });
+  }, []);
 
-    const state = checkFreighterAvailability(freighterDetector);
-    setAvailability(state);
+  const effectiveLoading = isLoading || modalLoading || status === "connecting" || status === "signing";
 
-    if (!state.available) {
-      setStatus("unavailable");
-    } else {
-      setStatus("idle");
+  // Network mismatch detection
+  const networkMismatch = checkNetworkMismatch(
+    walletNetwork ?? "",
+    appNetwork,
+  );
+
+  const mismatchMessage = buildWalletSelectorMismatchMessage(
+    selectedWalletId,
+    walletNetwork ?? "",
+    appNetwork,
+  );
+
+  // Wallet availability — computed synchronously during render when the
+  // modal opens.  `checkFreighterAvailability` is a pure sync call, so
+  // there is no need for an effect (and it avoids the
+  // react-hooks/set-state-in-effect lint rule).
+  const availability = isOpen
+    ? checkFreighterAvailability(freighterDetector)
+    : null;
+
+  // Persistent caching: persist the cached key when the wallet connects
+  useEffect(() => {
+    if (activeAddress) {
+      const cachedKey: WalletCachedKey = {
+        walletId: selectedWalletId,
+        address: activeAddress,
+        networkPassphrase: walletNetwork ?? "",
+        connectedAt: Date.now(),
+      };
+      walletSelectorStore.setCachedKey(cachedKey);
     }
-  }, [isOpen, freighterDetector]);
+  }, [activeAddress, selectedWalletId, walletNetwork]);
 
   const handleConnect = useCallback(
     async (walletId: SupportedWalletId) => {
-      setStatus("connecting");
+      void withModalWalletLoader(async () => {
+        setStatus("connecting");
 
-      try {
-        // Simulate wallet connection — in production this would invoke
-        // the StellarWalletsKit auth flow
-        onConnect?.(walletId);
-        setStatus("idle");
-      } catch (err) {
-        const result = handleWalletError(err);
+        try {
+          onConnect?.(walletId);
+          setStatus("idle");
+        } catch (err) {
+          const result = handleWalletError(err);
 
-        if (result.isRejection) {
-          setStatus("rejected");
-          showToast(result.message, "warning");
-        } else {
-          setStatus("error");
-          showToast(
-            "Failed to connect wallet. Please try again.",
-            "error"
-          );
+          if (result.isRejection) {
+            setStatus("rejected");
+            showToast(result.message, "warning");
+          } else {
+            setStatus("error");
+            showToast(
+              "Failed to connect wallet. Please try again.",
+              "error"
+            );
+          }
         }
-      }
+      });
     },
     [onConnect, showToast]
   );
 
-  const handleSign = useCallback(
-    async (signFn: () => Promise<string>) => {
-      setStatus("signing");
-
-      try {
-        const signedXdr = await signFn();
-        if (signedXdr) {
-          setStatus("idle");
-        } else {
-          setStatus("rejected");
-          showToast(
-            "Signature cancelled — you rejected the request in your wallet.",
-            "warning"
-          );
-        }
-      } catch (err) {
-        const result = handleWalletError(err);
-
-        if (result.isRejection) {
-          setStatus("rejected");
-          showToast(result.message, "warning");
-        } else {
-          setStatus("error");
-          showToast(result.message, "error");
-        }
-      }
-    },
-    [showToast]
-  );
+  const handleDisconnect = useCallback(() => {
+    void withModalWalletLoader(async () => {
+      onDisconnect?.();
+    });
+    onClose();
+  }, [onDisconnect, onClose]);
 
   if (!isOpen) return null;
 
@@ -200,7 +232,7 @@ export default function WalletSelectorModal({
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-primary">
-            Connect Wallet
+            Select Wallet
           </h2>
           <button
             type="button"
@@ -212,6 +244,17 @@ export default function WalletSelectorModal({
             ✕
           </button>
         </div>
+
+        {/* Network mismatch warning bar */}
+        {networkMismatch.mismatched && mismatchMessage && (
+          <div
+            data-testid="wallet-selector-network-warning"
+            className="bg-warning/40 border border-warning rounded-lg px-4 py-3 mb-4 text-warning-soft text-sm"
+            role="alert"
+          >
+            {mismatchMessage}
+          </div>
+        )}
 
         {/* Wallet availability warning */}
         {availability && !availability.available && (
@@ -235,7 +278,18 @@ export default function WalletSelectorModal({
           </div>
         )}
 
-        {/* Status banner */}
+        {/* Error message from props */}
+        {errorMessage && (
+          <div
+            data-testid="wallet-selector-error-message"
+            className="bg-danger/20 border border-danger rounded-lg px-4 py-3 mb-4 text-danger-soft text-sm text-center"
+            role="alert"
+          >
+            {errorMessage}
+          </div>
+        )}
+
+        {/* Rejection warning */}
         {status === "rejected" && (
           <div
             data-testid="wallet-selector-rejection-warning"
@@ -246,6 +300,7 @@ export default function WalletSelectorModal({
           </div>
         )}
 
+        {/* Error warning */}
         {status === "error" && (
           <div
             data-testid="wallet-selector-error-warning"
@@ -256,22 +311,104 @@ export default function WalletSelectorModal({
           </div>
         )}
 
+        {/* Loading spinner overlay */}
+        {effectiveLoading && (
+          <div
+            data-testid="wallet-selector-spinner"
+            className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 rounded-lg"
+          >
+            <div className="flex flex-col items-center space-y-2">
+              <svg
+                className="h-8 w-8 text-indigo-500 animate-spin"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+              <span className="text-sm text-gray-300">
+                Wallet operation in progress…
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Active wallet info */}
+        {activeAddress && (
+          <div
+            data-testid="wallet-selector-active-info"
+            className="mb-4 p-3 border border-white/10 rounded-lg"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-sm text-gray-300 font-mono">
+                  {activeAddress.slice(0, 4)}...{activeAddress.slice(-4)}
+                </span>
+              </div>
+              <button
+                onClick={handleDisconnect}
+                disabled={effectiveLoading}
+                className="text-sm text-red-400 hover:text-red-300 transition-colors disabled:opacity-50"
+                data-testid="wallet-selector-disconnect-btn"
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Wallet list */}
         <div className="space-y-2" data-testid="wallet-selector-list">
-          {SUPPORTED_WALLETS.map((wallet) => (
-            <button
-              key={wallet.id}
-              type="button"
-              data-testid={`wallet-selector-option-${wallet.id}`}
-              onClick={() => handleConnect(wallet.id)}
-              disabled={status === "connecting" || status === "signing"}
-              className="w-full text-left px-4 py-3 rounded-lg border border-white/10 hover:border-white/20 hover:bg-white/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span className="font-medium text-primary">
-                {wallet.label}
-              </span>
-            </button>
-          ))}
+          {SUPPORTED_WALLETS.map((wallet) => {
+            const isSelected = wallet.id === selectedWalletId;
+            const isConnected =
+              activeAddress !== null && wallet.id === selectedWalletId;
+
+            return (
+              <button
+                key={wallet.id}
+                type="button"
+                data-testid={`wallet-selector-option-${wallet.id}`}
+                onClick={() => handleConnect(wallet.id)}
+                disabled={effectiveLoading}
+                data-selected={isSelected}
+                data-connected={isConnected}
+                className={`w-full text-left px-4 py-3 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  isSelected
+                    ? "border-indigo-500 bg-indigo-600/20 text-white"
+                    : "border-white/10 hover:border-white/20 hover:bg-white/5 text-primary"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">
+                    {wallet.label}
+                  </span>
+                  {isConnected && (
+                    <span
+                      data-testid="wallet-selector-connected-badge"
+                      className="text-xs text-green-400"
+                    >
+                      Connected
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
