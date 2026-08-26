@@ -66,6 +66,7 @@ export default function Navbar() {
                 </Link>
               )}
               <span
+                role="status"
                 className="text-sm text-gray-300 font-mono bg-gray-800 px-3 py-1 rounded-full"
                 aria-label={`Connected wallet ${address}`}
               >
