@@ -4,6 +4,12 @@ import FreighterConnector from "@/app/components/FreighterConnector";
 import FreighterGasWarningBanner from "@/app/components/FreighterGasWarningBanner";
 import { freighterTracker, HIGH_FEE_THRESHOLD_STROOPS } from "@/app/lib/freighter_connector";
 
+const showToast = vi.hoisted(() => vi.fn());
+
+vi.mock("@/app/context/ToastContext", () => ({
+  useToast: () => ({ showToast }),
+}));
+
 // ---------------------------------------------------------------------------
 // #112 — React Testing Library assertions for freighter_connector
 // ---------------------------------------------------------------------------
@@ -247,6 +253,10 @@ describe("FreighterConnector component (#112)", () => {
     const logged = String(warnSpy.mock.calls[0][0]);
     expect(logged).toContain("SIGNATURE REJECTED");
     expect(logged).toContain("--- stack trace ---");
+    expect(showToast).toHaveBeenCalledWith(
+      "Signature cancelled — you rejected the request in your wallet.",
+      "warning"
+    );
   });
 
   it("also handles 'user declined' rejection phrasing", async () => {
