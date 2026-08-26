@@ -8,6 +8,7 @@ import {
   type FreighterSimulationResult,
 } from "@/app/lib/freighter_connector";
 import FreighterGasWarningBanner from "@/app/components/FreighterGasWarningBanner";
+import GasEstimationWarningBanner from "@/app/components/GasEstimationWarningBanner";
 
 export type FreighterConnectorStatus =
   | "idle"
@@ -115,6 +116,7 @@ export default function FreighterConnector({
       </button>
       <span data-testid="freighter-connector-status">{status}</span>
       <FreighterGasWarningBanner simulation={simulation} />
+      <GasEstimationWarningBanner />
     </div>
   );
 }
