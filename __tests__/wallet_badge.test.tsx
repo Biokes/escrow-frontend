@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import WalletBadge, { formatAddress } from "@/app/components/WalletBadge";
+import WalletBadge, { formatAddress, isValidStellarAddress } from "@/app/components/WalletBadge";
 
 describe("formatAddress helper", () => {
   it("truncates standard Stellar public address to G...1234 format", () => {
@@ -19,6 +19,21 @@ describe("formatAddress helper", () => {
 
   it("returns empty string when given empty or null-like address", () => {
     expect(formatAddress("")).toBe("");
+  });
+});
+
+describe("isValidStellarAddress helper", () => {
+  it("returns true for a valid 56-character Stellar G-address", () => {
+    const validGAddress = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
+    expect(isValidStellarAddress(validGAddress)).toBe(true);
+  });
+
+  it("returns false for malformed addresses or invalid characters", () => {
+    expect(isValidStellarAddress("G123")).toBe(false);
+    expect(isValidStellarAddress("INVALID_ADDRESS")).toBe(false);
+    expect(isValidStellarAddress("")).toBe(false);
+    expect(isValidStellarAddress(null)).toBe(false);
+    expect(isValidStellarAddress(undefined)).toBe(false);
   });
 });
 
@@ -124,6 +139,130 @@ describe("WalletBadge — connection states", () => {
   });
 });
 
+describe("WalletBadge — validation field errors & indicators", () => {
+  it("renders field error indicator and error message when error prop is provided", () => {
+    render(
+      <WalletBadge
+        address="GABC123456789012345678901234567890123456789012345678901234"
+        error="Invalid secret key format"
+      />
+    );
+
+    const badge = screen.getByTestId("wallet-badge");
+    expect(badge).toHaveAttribute("aria-invalid", "true");
+
+    const fieldError = screen.getByTestId("wallet-field-error");
+    expect(fieldError).toBeInTheDocument();
+
+    const errorText = screen.getByTestId("wallet-error-text");
+    expect(errorText).toHaveTextContent("Invalid secret key format");
+
+    const dot = screen.getByTestId("wallet-status-dot");
+    expect(dot).toHaveAttribute("data-status", "error");
+    expect(dot.className).toContain("bg-red-500");
+  });
+
+  it("renders field error indicator when fieldError prop is supplied", () => {
+    render(
+      <WalletBadge
+        address="GABC123456789012345678901234567890123456789012345678901234"
+        fieldError="Address checksum failed"
+      />
+    );
+
+    expect(screen.getByTestId("wallet-field-error")).toBeInTheDocument();
+    expect(screen.getByTestId("wallet-error-text")).toHaveTextContent("Address checksum failed");
+  });
+
+  it("triggers address format validation when validateAddress is true and address is invalid", () => {
+    render(<WalletBadge address="G123INVALID" validateAddress={true} />);
+
+    const badge = screen.getByTestId("wallet-badge");
+    expect(badge).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByTestId("wallet-field-error")).toBeInTheDocument();
+    expect(screen.getByTestId("wallet-error-text")).toHaveTextContent("Invalid Stellar address");
+  });
+
+  it("toggles error text elements off when validation errors are cleared", () => {
+    const { rerender } = render(
+      <WalletBadge
+        address="GABC123456789012345678901234567890123456789012345678901234"
+        error="Config error"
+      />
+    );
+
+    expect(screen.getByTestId("wallet-field-error")).toBeInTheDocument();
+    expect(screen.getByTestId("wallet-error-text")).toBeInTheDocument();
+
+    // Rerender with error cleared
+    rerender(
+      <WalletBadge
+        address="GABC123456789012345678901234567890123456789012345678901234"
+        error={null}
+      />
+    );
+
+    expect(screen.queryByTestId("wallet-field-error")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("wallet-error-text")).not.toBeInTheDocument();
+    expect(screen.getByTestId("wallet-badge")).not.toHaveAttribute("aria-invalid");
+  });
+});
+
+describe("WalletBadge — alerts", () => {
+  it("renders alert badge and text when alert prop is passed", () => {
+    render(
+      <WalletBadge
+        address="GABC123456789012345678901234567890123456789012345678901234"
+        alert="Wallet session expiring soon"
+      />
+    );
+
+    const alertBadge = screen.getByTestId("wallet-alert-badge");
+    expect(alertBadge).toBeInTheDocument();
+
+    const alertText = screen.getByTestId("wallet-alert-text");
+    expect(alertText).toHaveTextContent("Wallet session expiring soon");
+
+    const dot = screen.getByTestId("wallet-status-dot");
+    expect(dot).toHaveAttribute("data-status", "alert");
+    expect(dot.className).toContain("bg-amber-500");
+  });
+
+  it("toggles alert elements off when alert prop is cleared", () => {
+    const { rerender } = render(
+      <WalletBadge
+        address="GABC123456789012345678901234567890123456789012345678901234"
+        alert="Warning text"
+      />
+    );
+
+    expect(screen.getByTestId("wallet-alert-badge")).toBeInTheDocument();
+
+    rerender(
+      <WalletBadge
+        address="GABC123456789012345678901234567890123456789012345678901234"
+        alert={null}
+      />
+    );
+
+    expect(screen.queryByTestId("wallet-alert-badge")).not.toBeInTheDocument();
+  });
+
+  it("prioritizes validation error state over alert state when both are present", () => {
+    render(
+      <WalletBadge
+        address="GABC123456789012345678901234567890123456789012345678901234"
+        error="Critical configuration error"
+        alert="Low balance alert"
+      />
+    );
+
+    expect(screen.getByTestId("wallet-field-error")).toBeInTheDocument();
+    expect(screen.getByTestId("wallet-error-text")).toHaveTextContent("Critical configuration error");
+    expect(screen.queryByTestId("wallet-alert-badge")).not.toBeInTheDocument();
+  });
+});
+
 describe("WalletBadge — provider tag & status dot options", () => {
   it("renders active wallet provider tag when providerName is provided", () => {
     render(
@@ -189,3 +328,4 @@ describe("WalletBadge — interactions", () => {
     expect(handleClick).toHaveBeenCalledTimes(1);
   });
 });
+
