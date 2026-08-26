@@ -317,17 +317,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
         return result.signedTxXdr ?? "";
       } catch (e) {
-        walletTracker.track("sign", "error", "Wallet signTransaction failed", e);
+        const rejected = isWalletRejectedError(e);
+        walletTracker.track(
+          "sign",
+          "error",
+          rejected
+            ? "Wallet signTransaction rejected by user"
+            : "Wallet signTransaction failed",
+          e
+        );
 
         // A user declining in their wallet is an expected outcome, not a
         // fault: surface it as a warning and normalise it to
         // WalletRejectedError so callers can branch on it. Every other
         // failure is rethrown untouched.
-        if (isWalletRejectedError(e)) {
-          console.warn(
-            "[wallet_state_context] signature rejected by user:",
-            e instanceof Error ? e.message : String(e)
-          );
+        if (rejected) {
           showToast(
             "Signature cancelled - you rejected the request in your wallet.",
             "warning"
