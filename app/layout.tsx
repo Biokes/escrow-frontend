@@ -7,6 +7,7 @@ import Toast from "./components/Toast";
 import LedgerLoaderOverlay from "./components/LedgerLoaderOverlay";
 import WalletLoaderOverlay from "./components/WalletLoaderOverlay";
 import GasEstimationWarningBanner from "./components/GasEstimationWarningBanner";
+import SignatureTimeoutAlert from "./components/SignatureTimeoutAlert";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,6 +38,7 @@ export default function RootLayout({
         <ToastProvider>
           <WalletProvider>
             <GasEstimationWarningBanner className="mx-4 mt-4" />
+            <SignatureTimeoutAlert />
             {children}
             <Toast />
             <LedgerLoaderOverlay />
