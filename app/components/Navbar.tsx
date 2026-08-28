@@ -73,6 +73,13 @@ export default function Navbar() {
                 providerName={selectedWallet?.label}
                 networkMismatch={networkMismatchMessage}
               />
+              <span
+                role="status"
+                className="text-xs sm:text-sm text-gray-300 font-mono bg-gray-800 px-2 py-0.5 sm:px-3 sm:py-1 rounded-full transition-colors duration-200"
+                aria-label={`Connected wallet ${address}`}
+              >
+                {short(address)}
+              </span>
               <button
                 onClick={disconnect}
                 className={`bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition ${focusRing}`}
