@@ -60,7 +60,7 @@ describe("signature_timeout_alert timeout bounds (#244)", () => {
     const request: SignatureTimeoutAlertRequest = { xdr: "PAYLOAD-XDR" };
     const signFn = vi.fn(async (xdr: string) => xdr);
 
-    const promise = runSignatureWithTimeout(request, signFn, 5_000);
+    await runSignatureWithTimeout(request, signFn, 5_000);
     await vi.runAllTimersAsync();
 
     expect(signFn).toHaveBeenCalledWith("PAYLOAD-XDR");

@@ -71,20 +71,19 @@ export default function SignatureTimeoutAlert({
 
   useEffect(() => {
     if (!activeTransactionXdr) {
-      setParseMessage(null);
       return;
     }
 
+    let nextMessage: string | null = null;
     try {
       parseMultiSigEnvelope(activeTransactionXdr, {
         parseEnvelopeXdr: createStellarEnvelopeParser(NETWORK_PASSPHRASE),
       });
-      setParseMessage(null);
     } catch (parseError) {
-      setParseMessage(
-        parseError instanceof Error ? parseError.message : String(parseError)
-      );
+      nextMessage =
+        parseError instanceof Error ? parseError.message : String(parseError);
     }
+    setParseMessage(nextMessage);
   }, [activeTransactionXdr]);
 
   if (!hasTimeout && !networkMismatchMessage) return null;

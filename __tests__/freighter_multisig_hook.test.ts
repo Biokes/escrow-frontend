@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { useFreighterMultiSigAssembly } from "@/app/hooks/useFreighterMultiSigAssembly";
 import { WalletMultiSigStructureError } from "@/app/lib/wallet_state_context";
