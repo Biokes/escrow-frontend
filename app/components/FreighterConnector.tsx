@@ -7,6 +7,7 @@ import {
   freighterTracker,
   type FreighterSimulationResult,
 } from "@/app/lib/freighter_connector";
+import { useToast } from "@/app/context/ToastContext";
 import FreighterGasWarningBanner from "@/app/components/FreighterGasWarningBanner";
 import GasEstimationWarningBanner from "@/app/components/GasEstimationWarningBanner";
 
