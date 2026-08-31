@@ -1,3 +1,4 @@
+import { describe, expect, it, vi } from "vitest";
 import {
   checkSimulationFeeWarning,
   warnOnSimulationFee,
@@ -72,7 +73,7 @@ describe("network_sync_checker gas estimation warnings (#160)", () => {
   });
 
   it("warnOnSimulationFee logs warnings to console", () => {
-    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result: NetworkSyncSimulationResult = {
       fee: HIGH_FEE_THRESHOLD_STROOPS + 100,
@@ -90,7 +91,7 @@ describe("network_sync_checker gas estimation warnings (#160)", () => {
   });
 
   it("warnOnNetworkSyncSimulation displays toast on high fee", () => {
-    const mockShowToast: SyncToastHandler = jest.fn();
+    const mockShowToast: SyncToastHandler = vi.fn();
 
     const result: NetworkSyncSimulationResult = {
       fee: HIGH_FEE_THRESHOLD_STROOPS + 200,
@@ -106,7 +107,7 @@ describe("network_sync_checker gas estimation warnings (#160)", () => {
   });
 
   it("warnOnNetworkSyncSimulation displays toast on simulation error", () => {
-    const mockShowToast: SyncToastHandler = jest.fn();
+    const mockShowToast: SyncToastHandler = vi.fn();
 
     const result: NetworkSyncSimulationResult = {
       fee: 100,
@@ -124,7 +125,7 @@ describe("network_sync_checker gas estimation warnings (#160)", () => {
   });
 
   it("warnOnNetworkSyncSimulation does not toast when fee is normal", () => {
-    const mockShowToast: SyncToastHandler = jest.fn();
+    const mockShowToast: SyncToastHandler = vi.fn();
 
     const result: NetworkSyncSimulationResult = { fee: 500 };
 

@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 import NetworkSyncGasWarningBanner from "@/app/components/NetworkSyncGasWarningBanner";
 import { HIGH_FEE_THRESHOLD_STROOPS } from "@/app/lib/network_sync_checker";
 import type { NetworkSyncSimulationResult } from "@/app/lib/network_sync_checker";
