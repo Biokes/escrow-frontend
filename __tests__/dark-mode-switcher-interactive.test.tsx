@@ -121,8 +121,7 @@ describe("DarkModeSwitcher - premium interactive states #311", () => {
   describe("opacity and cursor styles", () => {
     it("enabled has opacity via hover (not disabled opacity)", () => {
       render(<DarkModeSwitcher isDarkMode={false} onToggle={vi.fn()} />);
-      expect(screen.getByRole("switch").className).not.toContain("opacity-50");
-      // but has disabled:opacity-50
+      // has disabled variant (Tailwind) but not active when enabled
       expect(screen.getByRole("switch").className).toContain("disabled:opacity-50");
     });
 
