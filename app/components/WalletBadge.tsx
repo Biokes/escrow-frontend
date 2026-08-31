@@ -1,10 +1,32 @@
 "use client";
 
 import React from "react";
+import ButtonSpinner from "./ButtonSpinner";
 
+export type WalletBadgeStatus =
+  | "connected"
+  | "disconnected"
+  | "loading"
+  | "error";
+
+/**
+ * Two prop shapes reached this component from separate pieces of work and both
+ * are still in use: `Navbar` drives it with `isConnecting` / `providerName` /
+ * `networkMismatch`, while the design-token call sites drive it with an
+ * explicit `status`. Rather than break either caller, the props are the union
+ * of both and `status` selects which rendering applies.
+ */
 export interface WalletBadgeProps {
   /** The connected Stellar public address (e.g. GABC...1234) */
   address?: string | null;
+
+  // --- Explicit-status form (design-token call sites) ---
+  /** Explicit badge status. Supplying this selects the design-token rendering. */
+  status?: WalletBadgeStatus;
+  /** Message shown in the error state. */
+  errorMessage?: string | null;
+
+  // --- Derived-status form (Navbar) ---
   /** Whether a wallet connection attempt is actively in progress */
   isConnecting?: boolean;
   /** Explicit connection status override (defaults to `Boolean(address)`) */
@@ -15,17 +37,19 @@ export interface WalletBadgeProps {
   networkMismatch?: boolean | string | null;
   /** Whether to display the status indicator dot (defaults to true) */
   showStatusDot?: boolean;
-  /** Callback fired when disconnect action is triggered */
-  onDisconnect?: () => void;
   /** Callback fired when badge is clicked */
   onClick?: () => void;
+
+  // --- Shared ---
+  /** Callback fired when disconnect action is triggered */
+  onDisconnect?: () => void;
   /** Additional CSS class names */
   className?: string;
   /** Custom data-testid attribute (defaults to "wallet-badge") */
   "data-testid"?: string;
 }
 
-/** Utility helper to format a Stellar G-address into G...1234 format */
+/** Truncate an address to `GABC...1234`, honouring custom affix lengths. */
 export function formatAddress(address: string, prefixLen = 4, suffixLen = 4): string {
   if (!address || address.length <= prefixLen + suffixLen) {
     return address || "";
@@ -36,11 +60,13 @@ export function formatAddress(address: string, prefixLen = 4, suffixLen = 4): st
 /**
  * WalletBadge Component (`wallet_badge`)
  *
- * Header status indicator component representing the current wallet connection status,
+ * Header status indicator representing the current wallet connection status,
  * active wallet provider, network alignment, and address.
  */
 export default function WalletBadge({
   address,
+  status,
+  errorMessage,
   isConnecting = false,
   isConnected,
   providerName,
@@ -51,12 +77,84 @@ export default function WalletBadge({
   className = "",
   "data-testid": testId = "wallet-badge",
 }: WalletBadgeProps) {
+  // ---------------------------------------------------------------------
+  // Explicit-status rendering (design tokens)
+  // ---------------------------------------------------------------------
+  if (status !== undefined) {
+    if (status === "loading") {
+      return (
+        <span
+          data-testid={testId}
+          data-status="loading"
+          className={`inline-flex items-center gap-2 text-sm font-mono text-text-muted bg-surface-field border border-border-subtle px-3 py-1 rounded-full ${className}`}
+        >
+          <ButtonSpinner className="h-3.5 w-3.5" />
+          <span>Connecting…</span>
+        </span>
+      );
+    }
+
+    if (status === "error") {
+      return (
+        <span
+          data-testid={testId}
+          data-status="error"
+          className={`inline-flex items-center gap-2 text-sm font-mono text-danger-soft bg-surface-field border border-danger px-3 py-1 rounded-full ${className}`}
+          title={errorMessage ?? undefined}
+        >
+          <span aria-hidden="true">⚠</span>
+          <span>{errorMessage ?? "Wallet error"}</span>
+        </span>
+      );
+    }
+
+    if (status === "connected" && address) {
+      return (
+        <span
+          data-testid={testId}
+          data-status="connected"
+          className={`inline-flex items-center gap-2 text-sm font-mono text-text-primary bg-surface-field border border-border-subtle px-3 py-1 rounded-full ${className}`}
+          aria-label={`Connected wallet ${address}`}
+        >
+          <span
+            aria-hidden="true"
+            className="h-2 w-2 rounded-full bg-success animate-pulse"
+          />
+          <span>{formatAddress(address)}</span>
+          {onDisconnect && (
+            <button
+              onClick={onDisconnect}
+              className="ml-1 text-text-muted hover:text-danger-soft transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-page rounded"
+              aria-label="Disconnect wallet"
+            >
+              ✕
+            </button>
+          )}
+        </span>
+      );
+    }
+
+    return (
+      <span
+        data-testid={testId}
+        data-status="disconnected"
+        className={`inline-flex items-center gap-2 text-sm font-mono text-text-muted bg-surface-field border border-border-subtle px-3 py-1 rounded-full ${className}`}
+      >
+        <span aria-hidden="true" className="h-2 w-2 rounded-full bg-text-disabled" />
+        <span>No wallet</span>
+      </span>
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Derived-status rendering (Navbar)
+  // ---------------------------------------------------------------------
   const activeConnected = isConnected !== undefined ? isConnected : Boolean(address);
   const hasMismatch = Boolean(networkMismatch);
 
-  // Status label & ARIA label derivation
   let statusText = "Not Connected";
-  let statusState: "connected" | "connecting" | "mismatch" | "disconnected" = "disconnected";
+  let statusState: "connected" | "connecting" | "mismatch" | "disconnected" =
+    "disconnected";
 
   if (isConnecting) {
     statusText = "Connecting...";
@@ -78,7 +176,6 @@ export default function WalletBadge({
       ? `Wallet network mismatch ${address || ""}`.trim()
       : "Wallet not connected";
 
-  // Dot color classes matching design system
   const dotClasses = {
     connected: "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.5)]",
     connecting: "bg-amber-400 animate-pulse",
@@ -86,9 +183,14 @@ export default function WalletBadge({
     disconnected: "bg-gray-500",
   }[statusState];
 
-  const content = (
+  // `data-status` is mirrored onto the badge as well as the dot so callers that
+  // read it off the badge itself keep working in this form too.
+  const badgeStatus = statusState === "connecting" ? "loading" : statusState;
+
+  return (
     <div
       data-testid={testId}
+      data-status={badgeStatus}
       role="status"
       aria-label={ariaLabel}
       onClick={onClick}
@@ -133,102 +235,5 @@ export default function WalletBadge({
         </button>
       )}
     </div>
-  );
-
-  return content;
-import ButtonSpinner from "./ButtonSpinner";
-
-export type WalletBadgeStatus =
-  | "connected"
-  | "disconnected"
-  | "loading"
-  | "error";
-
-export interface WalletBadgeProps {
-  address?: string | null;
-  status?: WalletBadgeStatus;
-  errorMessage?: string | null;
-  onDisconnect?: () => void;
-  className?: string;
-}
-
-function truncateAddress(address: string): string {
-  return `${address.slice(0, 4)}...${address.slice(-4)}`;
-}
-
-/**
- * Displays a compact wallet status badge showing the connected address,
- * connection status, or an error message. Uses the repository's canonical
- * design tokens for all colors, spacing, and typography.
- */
-export default function WalletBadge({
-  address,
-  status = "disconnected",
-  errorMessage,
-  onDisconnect,
-  className = "",
-}: WalletBadgeProps) {
-  if (status === "loading") {
-    return (
-      <span
-        data-testid="wallet-badge"
-        data-status="loading"
-        className={`inline-flex items-center gap-2 text-sm font-mono text-text-muted bg-surface-field border border-border-subtle px-3 py-1 rounded-full ${className}`}
-      >
-        <ButtonSpinner className="h-3.5 w-3.5" />
-        <span>Connecting…</span>
-      </span>
-    );
-  }
-
-  if (status === "error") {
-    return (
-      <span
-        data-testid="wallet-badge"
-        data-status="error"
-        className={`inline-flex items-center gap-2 text-sm font-mono text-danger-soft bg-surface-field border border-danger px-3 py-1 rounded-full ${className}`}
-        title={errorMessage ?? undefined}
-      >
-        <span aria-hidden="true">⚠</span>
-        <span>{errorMessage ?? "Wallet error"}</span>
-      </span>
-    );
-  }
-
-  if (status === "connected" && address) {
-    return (
-      <span
-        data-testid="wallet-badge"
-        data-status="connected"
-        className={`inline-flex items-center gap-2 text-sm font-mono text-text-primary bg-surface-field border border-border-subtle px-3 py-1 rounded-full ${className}`}
-        aria-label={`Connected wallet ${address}`}
-      >
-        <span
-          aria-hidden="true"
-          className="h-2 w-2 rounded-full bg-success animate-pulse"
-        />
-        <span>{truncateAddress(address)}</span>
-        {onDisconnect && (
-          <button
-            onClick={onDisconnect}
-            className="ml-1 text-text-muted hover:text-danger-soft transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-page rounded"
-            aria-label="Disconnect wallet"
-          >
-            ✕
-          </button>
-        )}
-      </span>
-    );
-  }
-
-  return (
-    <span
-      data-testid="wallet-badge"
-      data-status="disconnected"
-      className={`inline-flex items-center gap-2 text-sm font-mono text-text-muted bg-surface-field border border-border-subtle px-3 py-1 rounded-full ${className}`}
-    >
-      <span aria-hidden="true" className="h-2 w-2 rounded-full bg-text-disabled" />
-      <span>No wallet</span>
-    </span>
   );
 }

@@ -4,7 +4,7 @@ import { useIsAdmin } from "@/app/hooks/useIsAdmin";
 import { SUPPORTED_WALLETS } from "@/app/context/WalletContext";
 import Link from "next/link";
 
-import WalletBadge from "@/app/components/WalletBadge";
+import WalletBadge, { formatAddress } from "@/app/components/WalletBadge";
 
 export default function Navbar() {
   const {
@@ -78,7 +78,7 @@ export default function Navbar() {
                 className="text-xs sm:text-sm text-gray-300 font-mono bg-gray-800 px-2 py-0.5 sm:px-3 sm:py-1 rounded-full transition-colors duration-200"
                 aria-label={`Connected wallet ${address}`}
               >
-                {short(address)}
+                {formatAddress(address)}
               </span>
               <button
                 onClick={disconnect}
