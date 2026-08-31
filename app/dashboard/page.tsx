@@ -488,7 +488,7 @@ export default function Dashboard() {
             {fetchLoading ? (
               <LoadingSkeleton />
             ) : error ? (
-              <div className="text-center text-red-400" role="alert">
+              <div className="text-center text-red-400 animate-shake" role="alert" data-testid="dashboard-error-alert">
                 Error: {error}
               </div>
             ) : jobs.length === 0 ? (
@@ -509,11 +509,15 @@ export default function Dashboard() {
                     ].filter(Boolean) as string[];
 
                     return (
-                      <div key={job.id} className="border-b border-gray-800 last:border-b-0">
+                      <div
+                        key={job.id}
+                        data-testid="dashboard-list-item"
+                        className="border-b border-gray-800 last:border-b-0 animate-slide-in"
+                      >
                         <button
                           type="button"
                           onClick={() => setExpandedJobId(isExpanded ? null : job.id)}
-                          className="w-full text-left px-5 py-4 hover:bg-gray-800/50 transition"
+                          className="w-full text-left px-5 py-4 hover:bg-gray-800/50 transition-colors duration-150 active:scale-[0.99] active:bg-gray-800/70"
                           aria-expanded={isExpanded}
                         >
                           <div className="flex items-center justify-between gap-4">
@@ -540,7 +544,10 @@ export default function Dashboard() {
                         </button>
 
                         {isExpanded && (
-                          <div className="px-5 pb-5 space-y-4">
+                          <div
+                            data-testid="dashboard-expanded-panel"
+                            className="px-5 pb-5 space-y-4 animate-fade-in"
+                          >
                             {detailsLoading[job.id] ? (
                               <LoadingSkeleton />
                             ) : !expandedJob ? (
