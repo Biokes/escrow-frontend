@@ -107,8 +107,9 @@ describe("signature_timeout_alert timeout bounds (#244)", () => {
     const signFn = vi.fn(() => new Promise<string>(() => {}));
 
     const promise = runSignatureWithTimeout(request, signFn, 1_000);
+    const settled = promise.catch(() => {});
     await vi.advanceTimersByTimeAsync(1_000);
-    await promise.catch(() => {});
+    await settled;
 
     expect(request.payload).toBeNull();
     expect(payload.every((b) => b === 0)).toBe(true);
@@ -131,8 +132,9 @@ describe("signature_timeout_alert timeout bounds (#244)", () => {
     const signFn = vi.fn(() => new Promise<string>(() => {}));
 
     const promise = runSignatureWithTimeout(request, signFn, 500);
+    const settled = promise.catch(() => {});
     await vi.advanceTimersByTimeAsync(500);
-    await promise.catch(() => {});
+    await settled;
 
     // Memory cleared — operation cannot leak sensitive bytes post-abort.
     expect(request.payload).toBeNull();
@@ -210,8 +212,9 @@ describe("signature_timeout_alert timeout bounds (#244)", () => {
     });
 
     const promise = runSignatureWithTimeout(request, signFn, 5_000);
+    const settled = promise.catch(() => {});
     await vi.runAllTimersAsync();
-    await promise.catch(() => {});
+    await settled;
 
     // Memory should NOT be cleared for non-timeout errors (unmodified request)
     // The timeout path specifically clears; other errors pass through as-is.
