@@ -5,6 +5,7 @@ import { useWallet } from "@/app/context/WalletContext";
 import Navbar from "@/app/components/Navbar";
 import MilestoneCard from "@/app/components/MilestoneCard";
 import LoadingSkeleton from "@/app/components/LoadingSkeleton";
+import EmptyState from "@/app/components/EmptyState";
 import { useActionStates } from "@/app/hooks/useActionStates";
 import { useToast } from "@/app/context/ToastContext";
 import {
@@ -491,7 +492,11 @@ export default function Dashboard() {
                 Error: {error}
               </div>
             ) : jobs.length === 0 ? (
-              <p className="text-center text-gray-400">No jobs found for this wallet</p>
+              <EmptyState
+                title="No jobs found"
+                description="You don't have any escrow jobs for this wallet yet. Create one to get started."
+                icon="🗂️"
+              />
             ) : (
               <div className="space-y-5">
                 <div className="border border-gray-800 rounded-xl bg-gray-900 overflow-hidden">
