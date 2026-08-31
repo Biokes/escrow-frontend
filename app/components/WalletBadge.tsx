@@ -13,16 +13,6 @@ export interface WalletBadgeProps {
   providerName?: string;
   /** Network mismatch warning flag or message */
   networkMismatch?: boolean | string | null;
-  /** Validation error message or flag highlighting invalid input configuration */
-  error?: boolean | string | null;
-  /** Field-specific error message or indicator */
-  fieldError?: boolean | string | null;
-  /** Alert message or flag to highlight input configurations/warnings */
-  alert?: boolean | string | null;
-  /** Explicit flag indicating whether the address configuration is invalid */
-  invalidAddress?: boolean;
-  /** Whether to validate the Stellar public key address format */
-  validateAddress?: boolean;
   /** Whether to display the status indicator dot (defaults to true) */
   showStatusDot?: boolean;
   /** Callback fired when disconnect action is triggered */
@@ -43,17 +33,11 @@ export function formatAddress(address: string, prefixLen = 4, suffixLen = 4): st
   return `${address.slice(0, prefixLen)}...${address.slice(-suffixLen)}`;
 }
 
-/** Utility helper to check if a Stellar public key (G-address) format is valid */
-export function isValidStellarAddress(address?: string | null): boolean {
-  if (!address) return false;
-  return /^G[A-Za-z0-9]{55}$/.test(address);
-}
-
 /**
  * WalletBadge Component (`wallet_badge`)
  *
  * Header status indicator component representing the current wallet connection status,
- * active wallet provider, network alignment, address, field validation errors, and alerts.
+ * active wallet provider, network alignment, and address.
  */
 export default function WalletBadge({
   address,
@@ -61,11 +45,6 @@ export default function WalletBadge({
   isConnected,
   providerName,
   networkMismatch,
-  error,
-  fieldError,
-  alert,
-  invalidAddress = false,
-  validateAddress = false,
   showStatusDot = true,
   onDisconnect,
   onClick,
@@ -75,52 +54,23 @@ export default function WalletBadge({
   const activeConnected = isConnected !== undefined ? isConnected : Boolean(address);
   const hasMismatch = Boolean(networkMismatch);
 
-  // Address validation check
-  const addressFormatInvalid =
-    invalidAddress || (validateAddress && address ? !isValidStellarAddress(address) : false);
-
-  // Derive consolidated validation error and alert text
-  const combinedError = error || fieldError || (addressFormatInvalid ? "Invalid Stellar address" : null);
-  const hasError = Boolean(combinedError);
-  const errorMessage =
-    typeof combinedError === "string"
-      ? combinedError
-      : combinedError
-      ? "Invalid wallet configuration"
-      : null;
-
-  const hasAlert = Boolean(alert);
-  const alertMessage =
-    typeof alert === "string" ? alert : alert ? "Configuration alert" : null;
-
   // Status label & ARIA label derivation
   let statusText = "Not Connected";
-  let statusState: "connected" | "connecting" | "mismatch" | "error" | "alert" | "disconnected" =
-    "disconnected";
+  let statusState: "connected" | "connecting" | "mismatch" | "disconnected" = "disconnected";
 
   if (isConnecting) {
     statusText = "Connecting...";
     statusState = "connecting";
-  } else if (hasError) {
-    statusText = address ? formatAddress(address) : errorMessage || "Invalid Configuration";
-    statusState = "error";
   } else if (hasMismatch) {
     statusText = address ? formatAddress(address) : "Network Mismatch";
     statusState = "mismatch";
-  } else if (hasAlert) {
-    statusText = address ? formatAddress(address) : alertMessage || "Alert";
-    statusState = "alert";
   } else if (activeConnected && address) {
     statusText = formatAddress(address);
     statusState = "connected";
   }
 
   const ariaLabel =
-    statusState === "error"
-      ? `Wallet validation error: ${errorMessage || "Invalid configuration"} ${address || ""}`.trim()
-      : statusState === "alert"
-      ? `Wallet alert: ${alertMessage || "Alert"} ${address || ""}`.trim()
-      : statusState === "connected"
+    statusState === "connected"
       ? `Connected wallet ${address}`
       : statusState === "connecting"
       ? "Wallet connecting"
@@ -133,26 +83,16 @@ export default function WalletBadge({
     connected: "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.5)]",
     connecting: "bg-amber-400 animate-pulse",
     mismatch: "bg-rose-400 animate-ping",
-    error: "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)] animate-pulse",
-    alert: "bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]",
     disconnected: "bg-gray-500",
   }[statusState];
-
-  // Container border and background theme
-  const borderBgClasses = hasError
-    ? "border-red-500/50 bg-red-950/40 text-red-200 hover:border-red-400"
-    : hasAlert
-    ? "border-amber-500/50 bg-amber-950/40 text-amber-200 hover:border-amber-400"
-    : "border-gray-800 bg-gray-900/90 text-gray-200 hover:border-gray-700";
 
   const content = (
     <div
       data-testid={testId}
       role="status"
       aria-label={ariaLabel}
-      aria-invalid={hasError ? true : undefined}
       onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-mono shadow-sm transition-all duration-150 ${borderBgClasses} ${
+      className={`inline-flex items-center gap-2 rounded-full border border-gray-800 bg-gray-900/90 px-3 py-1 text-sm font-mono text-gray-200 shadow-sm transition-all duration-150 hover:border-gray-700 ${
         onClick ? "cursor-pointer hover:bg-gray-800/80" : ""
       } ${className}`}
     >
@@ -178,31 +118,6 @@ export default function WalletBadge({
         {statusText}
       </span>
 
-      {/* Field error indicator & text message toggle */}
-      {hasError && (
-        <span
-          data-testid="wallet-field-error"
-          role="alert"
-          aria-live="polite"
-          className="inline-flex items-center gap-1 text-xs font-sans text-red-400 bg-red-950/80 border border-red-800/60 px-2 py-0.5 rounded font-medium"
-        >
-          <span aria-hidden="true" className="font-bold">⚠</span>
-          <span data-testid="wallet-error-text">{errorMessage || "Invalid configuration"}</span>
-        </span>
-      )}
-
-      {/* Alert indicator & text message toggle */}
-      {!hasError && hasAlert && (
-        <span
-          data-testid="wallet-alert-badge"
-          role="status"
-          aria-live="polite"
-          className="inline-flex items-center gap-1 text-xs font-sans text-amber-400 bg-amber-950/80 border border-amber-800/60 px-2 py-0.5 rounded font-medium"
-        >
-          <span data-testid="wallet-alert-text">{alertMessage || "Alert"}</span>
-        </span>
-      )}
-
       {activeConnected && onDisconnect && (
         <button
           type="button"
@@ -221,8 +136,6 @@ export default function WalletBadge({
   );
 
   return content;
-}
-
 import ButtonSpinner from "./ButtonSpinner";
 
 export type WalletBadgeStatus =
